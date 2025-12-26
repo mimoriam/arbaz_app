@@ -4,9 +4,10 @@ import 'package:google_fonts/google_fonts.dart';
 
 /// Data class to hold check-in responses
 class CheckInResponse {
-  String? medication;
-  String? mood;
+  String? sleep;
   String? energy;
+  String? mood;
+  String? medication;
   bool? wantsBrainExercise;
   String? voiceNoteText;
 
@@ -33,7 +34,7 @@ class SeniorCheckInFlow extends StatefulWidget {
 class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
     with SingleTickerProviderStateMixin {
   int _currentStep = 0;
-  final int _totalSteps = 3; // Medication, Mood, Energy
+  final int _totalSteps = 4; // Sleep, Energy, Mood, Medication
   final CheckInResponse _response = CheckInResponse();
   bool _showBrainExercise = false;
   bool _showSuccess = false;
@@ -255,14 +256,95 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
   Widget _buildCurrentQuestion(bool isDarkMode) {
     switch (_currentStep) {
       case 0:
-        return _buildMedicationQuestion(isDarkMode);
+        return _buildSleepQuestion(isDarkMode);
       case 1:
-        return _buildMoodQuestion(isDarkMode);
-      case 2:
         return _buildEnergyQuestion(isDarkMode);
+      case 2:
+        return _buildMoodQuestion(isDarkMode);
+      case 3:
+        return _buildMedicationQuestion(isDarkMode);
       default:
         return const SizedBox();
     }
+  }
+
+  Widget _buildSleepQuestion(bool isDarkMode) {
+    return Column(
+      children: [
+        Text(
+          "How did you sleep?",
+          textAlign: TextAlign.center,
+          style: GoogleFonts.inter(
+            fontSize: 28,
+            fontWeight: FontWeight.w800,
+            color: isDarkMode
+                ? AppColors.textPrimaryDark
+                : AppColors.textPrimary,
+            height: 1.2,
+          ),
+        ),
+        const SizedBox(height: 40),
+        _buildOptionCard(
+          isDarkMode: isDarkMode,
+          label: "Great",
+          emoji: "😴",
+          isSelected: _response.sleep == "great",
+          onTap: () async {
+            if (_transitionInProgress) return;
+            _transitionInProgress = true;
+            setState(() => _response.sleep = "great");
+            await Future.delayed(const Duration(milliseconds: 200));
+            await _nextStep();
+            if (mounted) _transitionInProgress = false;
+          },
+        ),
+        const SizedBox(height: 12),
+        _buildOptionCard(
+          isDarkMode: isDarkMode,
+          label: "Good",
+          emoji: "🌙",
+          isSelected: _response.sleep == "good",
+          onTap: () async {
+            if (_transitionInProgress) return;
+            _transitionInProgress = true;
+            setState(() => _response.sleep = "good");
+            await Future.delayed(const Duration(milliseconds: 200));
+            await _nextStep();
+            if (mounted) _transitionInProgress = false;
+          },
+        ),
+        const SizedBox(height: 12),
+        _buildOptionCard(
+          isDarkMode: isDarkMode,
+          label: "Okay",
+          emoji: "😐",
+          isSelected: _response.sleep == "okay",
+          onTap: () async {
+            if (_transitionInProgress) return;
+            _transitionInProgress = true;
+            setState(() => _response.sleep = "okay");
+            await Future.delayed(const Duration(milliseconds: 200));
+            await _nextStep();
+            if (mounted) _transitionInProgress = false;
+          },
+        ),
+        const SizedBox(height: 12),
+        _buildOptionCard(
+          isDarkMode: isDarkMode,
+          label: "Poorly",
+          emoji: "😩",
+          isSelected: _response.sleep == "poorly",
+          onTap: () async {
+            if (_transitionInProgress) return;
+            _transitionInProgress = true;
+            setState(() => _response.sleep = "poorly");
+            await Future.delayed(const Duration(milliseconds: 200));
+            await _nextStep();
+            if (mounted) _transitionInProgress = false;
+          },
+        ),
+      ],
+    );
   }
 
   Widget _buildMedicationQuestion(bool isDarkMode) {

@@ -1,4 +1,5 @@
 import 'package:arbaz_app/screens/navbar/calendar/calendar_screen.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/cognitive_games_screen.dart';
 import 'package:arbaz_app/screens/navbar/home/senior_checkin_flow.dart';
 import 'package:arbaz_app/screens/navbar/settings/settings_screen.dart';
 import 'package:arbaz_app/services/vacation_mode_provider.dart';
@@ -239,113 +240,167 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
 
   Widget _buildHeader(bool isDarkMode) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+      child: Column(
         children: [
-          // User Avatar
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: AppColors.primaryBlue.withValues(alpha: 0.3),
-                width: 2,
-              ),
-            ),
-            child: CircleAvatar(
-              backgroundColor: isDarkMode
-                  ? AppColors.surfaceDark
-                  : AppColors.inputFillLight,
-              child: Icon(
-                Icons.person_outline,
-                color: isDarkMode
-                    ? AppColors.textSecondaryDark
-                    : AppColors.textSecondary,
-                size: 24,
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-
-          // Greeting Text
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Hi $_userName!',
-                  style: GoogleFonts.inter(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
+          Row(
+            children: [
+              // User Avatar
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: AppColors.primaryBlue.withValues(alpha: 0.3),
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primaryBlue.withValues(alpha: 0.1),
+                      blurRadius: 10,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+                child: CircleAvatar(
+                  backgroundColor: isDarkMode
+                      ? AppColors.surfaceDark
+                      : AppColors.inputFillLight,
+                  child: Icon(
+                    Icons.person_outline,
                     color: isDarkMode
-                        ? AppColors.textPrimaryDark
-                        : AppColors.textPrimary,
+                        ? AppColors.textSecondaryDark
+                        : AppColors.textSecondary,
+                    size: 26,
                   ),
                 ),
-                Text(
-                  _getGreeting(),
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.primaryBlue,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
+              ),
+              const SizedBox(width: 16),
 
-          // Action Icons
-          _buildHeaderIcon(
-            Icons.calendar_today_outlined,
-            isDarkMode,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const CalendarScreen()),
-              );
-            },
+              // Greeting Text
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Hi $_userName!',
+                      style: GoogleFonts.inter(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: isDarkMode
+                            ? AppColors.textPrimaryDark
+                            : AppColors.textPrimary,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    Text(
+                      _getGreeting(),
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.primaryBlue,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          _buildHeaderIcon(
-            Icons.settings_outlined,
-            isDarkMode,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
-            },
+          const SizedBox(height: 20),
+
+          // Quick Action Bar
+          Row(
+            children: [
+              _buildHeaderAction(
+                Icons.calendar_today_rounded,
+                'Calendar',
+                isDarkMode,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (context) => const CalendarScreen()),
+                  );
+                },
+              ),
+              const SizedBox(width: 12),
+              _buildHeaderAction(
+                Icons.psychology_rounded,
+                'Brain Gym',
+                isDarkMode,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (context) => const CognitiveGamesScreen()),
+                  );
+                },
+              ),
+              const SizedBox(width: 12),
+              _buildHeaderAction(
+                Icons.settings_rounded,
+                'Settings',
+                isDarkMode,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (context) => const SettingsScreen()),
+                  );
+                },
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildHeaderIcon(
+  Widget _buildHeaderAction(
     IconData icon,
+    String label,
     bool isDarkMode, {
-    VoidCallback? onTap,
+    required VoidCallback onTap,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            color: isDarkMode
+                ? AppColors.surfaceDark
+                : AppColors.primaryBlue.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isDarkMode
+                  ? AppColors.borderDark
+                  : AppColors.primaryBlue.withValues(alpha: 0.1),
+            ),
           ),
-        ),
-        child: Icon(
-          icon,
-          size: 20,
-          color: isDarkMode
-              ? AppColors.textSecondaryDark
-              : AppColors.textSecondary,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 20,
+                color: AppColors.primaryBlue,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: isDarkMode
+                      ? AppColors.textSecondaryDark
+                      : AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

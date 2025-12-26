@@ -1,3 +1,4 @@
+import 'package:arbaz_app/screens/navbar/family_dashboard/family_dashboard_screen.dart';
 import 'package:arbaz_app/screens/navbar/settings/safety_vault/safety_vault_screen.dart';
 import 'package:arbaz_app/services/vacation_mode_provider.dart';
 import 'package:flutter/material.dart';
@@ -128,6 +129,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     const SizedBox(height: 12),
                     _buildFamilyCircle(isDarkMode),
+
+                    const SizedBox(height: 28),
+
+                    // Family Dashboard Section
+                    _buildSectionHeader(
+                      isDarkMode,
+                      icon: Icons.dashboard_outlined,
+                      title: 'DASHBOARD',
+                    ),
+                    const SizedBox(height: 12),
+                    _buildFamilyDashboardCard(isDarkMode),
 
                     const SizedBox(height: 24),
 
@@ -912,6 +924,95 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Icon(
               Icons.chevron_right,
               color: Colors.white.withValues(alpha: 0.5),
+              size: 24,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFamilyDashboardCard(bool isDarkMode) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const FamilyDashboardScreen()),
+        );
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+          ),
+          boxShadow: isDarkMode
+              ? null
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+        ),
+        child: Row(
+          children: [
+            // Dashboard Icon
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: AppColors.primaryBlue.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.dashboard_outlined,
+                color: AppColors.primaryBlue,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 16),
+
+            // Text
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Family Dashboard',
+                    style: GoogleFonts.inter(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: isDarkMode
+                          ? AppColors.textPrimaryDark
+                          : AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Family Status Overview',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w400,
+                      color: isDarkMode
+                          ? AppColors.textSecondaryDark
+                          : AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Arrow
+            Icon(
+              Icons.chevron_right,
+              color: isDarkMode
+                  ? AppColors.textSecondaryDark
+                  : AppColors.textSecondary,
               size: 24,
             ),
           ],
