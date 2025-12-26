@@ -2,13 +2,17 @@ import 'package:arbaz_app/screens/auth/login/login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/theme_provider.dart';
+import 'services/vacation_mode_provider.dart';
 import 'utils/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(
     MultiProvider(
-      providers: [ChangeNotifierProvider(create: (_) => ThemeProvider())],
+      providers: [
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),
+        ChangeNotifierProvider(create: (_) => VacationModeProvider()),
+      ],
       child: const MainApp(),
     ),
   );

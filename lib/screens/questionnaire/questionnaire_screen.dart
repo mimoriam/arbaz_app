@@ -1,6 +1,7 @@
 import 'package:arbaz_app/screens/navbar/home/home_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class QuestionnaireScreen extends StatefulWidget {
   const QuestionnaireScreen({super.key});
@@ -9,15 +10,96 @@ class QuestionnaireScreen extends StatefulWidget {
   State<QuestionnaireScreen> createState() => _QuestionnaireScreenState();
 }
 
-class _QuestionnaireScreenState extends State<QuestionnaireScreen> {
+class _QuestionnaireScreenState extends State<QuestionnaireScreen>
+    with TickerProviderStateMixin {
+  late AnimationController _logoController;
+  late AnimationController _titleController;
+  late AnimationController _card1Controller;
+  late AnimationController _card2Controller;
+
+  late Animation<double> _logoFade;
+  late Animation<double> _logoScale;
+  late Animation<double> _titleFade;
+  late Animation<Offset> _titleSlide;
+  late Animation<double> _card1Fade;
+  late Animation<Offset> _card1Slide;
+  late Animation<double> _card2Fade;
+  late Animation<Offset> _card2Slide;
+
+  @override
+  void initState() {
+    super.initState();
+    _setupAnimations();
+    _startStaggeredAnimations();
+  }
+
+  void _setupAnimations() {
+    // Logo animation
+    _logoController = AnimationController(vsync: this, duration: const Duration(milliseconds: 600));
+    _logoFade = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _logoController, curve: Curves.easeOut),
+    );
+    _logoScale = Tween<double>(begin: 0.5, end: 1.0).animate(
+      CurvedAnimation(parent: _logoController, curve: Curves.elasticOut),
+    );
+
+    // Title animation
+    _titleController = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    _titleFade = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _titleController, curve: Curves.easeOut),
+    );
+    _titleSlide = Tween<Offset>(begin: const Offset(0, 0.3), end: Offset.zero).animate(
+      CurvedAnimation(parent: _titleController, curve: Curves.easeOutCubic),
+    );
+
+    // Card 1 animation
+    _card1Controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    _card1Fade = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _card1Controller, curve: Curves.easeOut),
+    );
+    _card1Slide = Tween<Offset>(begin: const Offset(0.3, 0), end: Offset.zero).animate(
+      CurvedAnimation(parent: _card1Controller, curve: Curves.easeOutCubic),
+    );
+
+    // Card 2 animation
+    _card2Controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    _card2Fade = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _card2Controller, curve: Curves.easeOut),
+    );
+    _card2Slide = Tween<Offset>(begin: const Offset(0.3, 0), end: Offset.zero).animate(
+      CurvedAnimation(parent: _card2Controller, curve: Curves.easeOutCubic),
+    );
+  }
+
+  void _startStaggeredAnimations() async {
+    await Future.delayed(const Duration(milliseconds: 100));
+    if (!mounted) return;
+    _logoController.forward();
+    await Future.delayed(const Duration(milliseconds: 200));
+    if (!mounted) return;
+    _titleController.forward();
+    await Future.delayed(const Duration(milliseconds: 200));
+    if (!mounted) return;
+    _card1Controller.forward();
+    await Future.delayed(const Duration(milliseconds: 150));
+    if (!mounted) return;
+    _card2Controller.forward();
+  }
+  @override
+  void dispose() {
+    _logoController.dispose();
+    _titleController.dispose();
+    _card1Controller.dispose();
+    _card2Controller.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: isDarkMode
-          ? Theme.of(context).scaffoldBackgroundColor
-          : AppColors.backgroundLight,
+      backgroundColor: isDarkMode ? AppColors.backgroundDark : AppColors.backgroundLight,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -25,80 +107,88 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Icon
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryBlue.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.security,
-                    size: 64,
-                    color: AppColors.primaryBlue,
+                // Animated Logo
+                FadeTransition(
+                  opacity: _logoFade,
+                  child: ScaleTransition(
+                    scale: _logoScale,
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryBlue.withValues(alpha: 0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.security, size: 64, color: AppColors.primaryBlue),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 24),
 
-                // Title
-                Text(
-                  'SafeCheck',
-                  style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                    fontSize: 32,
-                    letterSpacing: -1.0,
-                  ),
-                ),
-                const SizedBox(height: 8),
-
-                // Tagline
-                Text(
-                  'Keeping seniors safe and families\nconnected.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: isDarkMode
-                        ? Colors.grey[400]
-                        : AppColors.textSecondary,
-                    height: 1.5,
+                // Animated Title
+                FadeTransition(
+                  opacity: _titleFade,
+                  child: SlideTransition(
+                    position: _titleSlide,
+                    child: Column(
+                      children: [
+                        Text(
+                          'SafeCheck',
+                          style: GoogleFonts.inter(
+                            fontSize: 32,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -1.0,
+                            color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Keeping seniors safe and families\nconnected.',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.inter(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w400,
+                            color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+                            height: 1.5,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 28),
 
-                // Option 1: Senior
-                _buildRoleCard(
-                  context,
-                  title: 'I am a Senior',
-                  subtitle: 'Use for myself',
-                  icon: Icons.home_outlined,
-                  color: AppColors.primaryBlue,
-                  onTap: () {
-                    Navigator.push(
+                // Animated Card 1: Senior
+                FadeTransition(
+                  opacity: _card1Fade,
+                  child: SlideTransition(
+                    position: _card1Slide,
+                    child: _buildRoleCard(
                       context,
-                      MaterialPageRoute(
-                        builder: (context) => const SeniorHomeScreen(),
-                      ),
-                    );
-                  },
+                      title: 'I am a Senior',
+                      subtitle: 'Use for myself',
+                      icon: Icons.home_outlined,
+                      color: AppColors.primaryBlue,
+                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SeniorHomeScreen())),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 16),
 
-                // Option 2: Family
-                _buildRoleCard(
-                  context,
-                  title: 'I am Family',
-                  subtitle: 'Monitoring a loved one',
-                  icon: Icons.people_outline,
-                  color: AppColors.successGreen,
-                  onTap: () {
-                    Navigator.push(
+                // Animated Card 2: Family
+                FadeTransition(
+                  opacity: _card2Fade,
+                  child: SlideTransition(
+                    position: _card2Slide,
+                    child: _buildRoleCard(
                       context,
-                      MaterialPageRoute(
-                        builder: (context) => const FamilyHomeScreen(),
-                      ),
-                    );
-                  },
+                      title: 'I am Family',
+                      subtitle: 'Monitoring a loved one',
+                      icon: Icons.people_outline,
+                      color: AppColors.successGreen,
+                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FamilyHomeScreen())),
+                    ),
+                  ),
                 ),
-
-                // Bottom padding for safe scrolling
                 const SizedBox(height: 44),
               ],
             ),
@@ -119,7 +209,7 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen> {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Material(
-      color: isDarkMode ? Theme.of(context).cardColor : Colors.white,
+      color: isDarkMode ? AppColors.surfaceDark : Colors.white,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
         side: BorderSide(color: color.withValues(alpha: 0.3), width: 1.5),
@@ -140,25 +230,32 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen> {
                     children: [
                       Text(
                         title,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: isDarkMode
-                              ? Colors.white
-                              : AppColors.textPrimary,
+                        style: GoogleFonts.inter(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         subtitle,
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Colors.grey.shade500,
-                          fontWeight: FontWeight.w600,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
                         ),
                       ),
                     ],
                   ),
                 ),
-                Icon(icon, size: 32, color: color),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(icon, size: 28, color: color),
+                ),
               ],
             ),
           ),

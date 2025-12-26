@@ -1,7 +1,12 @@
 import 'package:arbaz_app/screens/navbar/calendar/calendar_screen.dart';
+import 'package:arbaz_app/screens/navbar/home/senior_checkin_flow.dart';
+import 'package:arbaz_app/screens/navbar/settings/settings_screen.dart';
+import 'package:arbaz_app/services/vacation_mode_provider.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 
 /// Represents the different status states for the senior user
 enum SafetyStatus {
@@ -21,6 +26,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     with SingleTickerProviderStateMixin {
   SafetyStatus _currentStatus = SafetyStatus.safe;
   bool _isSendingHelp = false;
+  bool _hasCheckedInToday = false;
+  int _currentStreak =
+      46; // Mock streak - in real app, this comes from a service
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
@@ -58,15 +66,93 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   }
 
   void _onStatusButtonTap() {
-    // Toggle between safe and OK status for demo
-    setState(() {
-      _currentStatus = _currentStatus == SafetyStatus.safe
-          ? SafetyStatus.ok
-          : SafetyStatus.safe;
-    });
+    // Add haptic feedback for better UX
+    HapticFeedback.mediumImpact();
+
+    // If already checked in today, just toggle the visual state
+    if (_hasCheckedInToday) {
+      setState(() {
+        _currentStatus = _currentStatus == SafetyStatus.safe
+            ? SafetyStatus.ok
+            : SafetyStatus.safe;
+      });
+      return;
+    }
+
+    // Show the check-in questionnaire flow
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => SeniorCheckInFlow(
+          userName: _userName,
+          currentStreak: _currentStreak,
+          onComplete: () {
+            setState(() {
+              _hasCheckedInToday = true;
+              _currentStatus = SafetyStatus.ok;
+              _currentStreak++; // Increment streak on successful check-in
+              // Stop pulse animation after successful check-in
+              _pulseController.stop();
+              _pulseController.value = 1.0;
+            });
+          },
+        ),
+      ),
+    );
   }
 
   void _onEmergencyTap() {
+    // Add heavy haptic feedback for emergency action
+    HapticFeedback.heavyImpact();
+
+    // Show confirmation dialog to prevent accidental triggers
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.dangerRed.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.warning_amber_rounded, color: AppColors.dangerRed, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Text('Emergency Alert', style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700)),
+            ],
+          ),
+          content: Text(
+            'This will immediately alert your family members. Are you sure you want to send an emergency alert?',
+            style: GoogleFonts.inter(fontSize: 15, height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text('Cancel', style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                _sendEmergencyAlert();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.dangerRed,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text('Send Alert', style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _sendEmergencyAlert() {
     setState(() {
       _isSendingHelp = true;
     });
@@ -99,43 +185,55 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final screenHeight = MediaQuery.of(context).size.height;
 
-    return Scaffold(
-      backgroundColor: isDarkMode
-          ? AppColors.backgroundDark
-          : AppColors.backgroundLight,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Header Section
-            _buildHeader(isDarkMode),
+    return Consumer<VacationModeProvider>(
+      builder: (context, vacationProvider, child) {
+        final isVacationMode = vacationProvider.isVacationMode;
 
-            // Main Content
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Column(
-                  children: [
-                    SizedBox(height: screenHeight * 0.03),
+        return Scaffold(
+          backgroundColor: isDarkMode
+              ? AppColors.backgroundDark
+              : AppColors.backgroundLight,
+          body: SafeArea(
+            child: Column(
+              children: [
+                // Header Section
+                _buildHeader(isDarkMode),
 
-                    // Large Status Circle Button
-                    _buildStatusButton(),
+                // Vacation Mode Card (if enabled)
+                if (isVacationMode) _buildVacationModeCard(isDarkMode),
 
-                    SizedBox(height: screenHeight * 0.05),
+                // Main Content
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Column(
+                      children: [
+                        SizedBox(height: screenHeight * 0.03),
 
-                    // Daily Health Message Section
-                    _buildHealthMessageSection(isDarkMode),
+                        // Large Status Circle Button
+                        _buildStatusButton(
+                          isVacationMode: isVacationMode,
+                          isLoading: vacationProvider.isLoading,
+                        ),
 
-                    SizedBox(height: screenHeight * 0.05),
-                  ],
+                        SizedBox(height: screenHeight * 0.05),
+
+                        // Daily Health Message Section
+                        _buildHealthMessageSection(isDarkMode),
+
+                        SizedBox(height: screenHeight * 0.05),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ),
 
-            // Emergency SOS Bar
-            _buildEmergencyBar(),
-          ],
-        ),
-      ),
+                // Emergency SOS Bar
+                _buildEmergencyBar(),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -214,7 +312,10 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
             Icons.settings_outlined,
             isDarkMode,
             onTap: () {
-              // Navigate to settings
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
             },
           ),
         ],
@@ -250,98 +351,201 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     );
   }
 
-  Widget _buildStatusButton() {
+  Widget _buildVacationModeCard(bool isDarkMode) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [const Color(0xFF6366F1), const Color(0xFF818CF8)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF6366F1).withValues(alpha: 0.3),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // Sun Icon
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.wb_sunny_outlined,
+              color: Colors.white,
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 16),
+
+          // Text
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Vacation Mode On',
+                  style: GoogleFonts.inter(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Check-ins are paused',
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w400,
+                    color: Colors.white.withValues(alpha: 0.8),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Info Icon
+          Icon(
+            Icons.info_outline,
+            color: Colors.white.withValues(alpha: 0.9),
+            size: 24,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusButton({
+    bool isVacationMode = false,
+    bool isLoading = false,
+  }) {
     final bool isSafe = _currentStatus == SafetyStatus.safe;
-    final Color primaryColor = isSafe
-        ? const Color(0xFF3B9EFF) // Bright blue
-        : const Color(0xFFFFBF00); // Golden yellow
-    final Color secondaryColor = isSafe
-        ? const Color(0xFF1E7AE5) // Darker blue
-        : const Color(0xFFE5A800); // Darker yellow
+    final Color primaryColor = (isVacationMode || isLoading)
+        ? Colors.grey.shade400 // Gray when vacation mode is on or loading
+        : (isSafe
+            ? const Color(0xFF3B9EFF) // Bright blue
+            : const Color(0xFFFFBF00)); // Golden yellow
+    final Color secondaryColor = (isVacationMode || isLoading)
+        ? Colors.grey.shade500 // Darker gray when vacation mode is on or loading
+        : (isSafe
+            ? const Color(0xFF1E7AE5) // Darker blue
+            : const Color(0xFFE5A800)); // Darker yellow
 
     return AnimatedBuilder(
       animation: _pulseAnimation,
       builder: (context, child) {
-        return Transform.scale(scale: _pulseAnimation.value, child: child);
+        return Transform.scale(
+          scale: isVacationMode ? 1.0 : _pulseAnimation.value,
+          child: child,
+        );
       },
       child: GestureDetector(
-        onTap: _onStatusButtonTap,
-        child: Container(
-          width: 220,
-          height: 220,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: RadialGradient(
-              colors: [primaryColor, secondaryColor],
-              center: Alignment.topCenter,
-              radius: 0.8,
+        onTap: (isVacationMode || isLoading) ? null : _onStatusButtonTap,
+        child: Opacity(
+          opacity: (isVacationMode || isLoading) ? 0.5 : 1.0,
+          child: Container(
+            width: 220,
+            height: 220,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [primaryColor, secondaryColor],
+                center: Alignment.topCenter,
+                radius: 0.8,
+              ),
+              boxShadow: isVacationMode
+                  ? [] // No shadow when disabled
+                  : [
+                      BoxShadow(
+                        color: primaryColor.withValues(alpha: 0.4),
+                        blurRadius: 30,
+                        spreadRadius: 8,
+                      ),
+                      BoxShadow(
+                        color: secondaryColor.withValues(alpha: 0.3),
+                        blurRadius: 60,
+                        spreadRadius: 20,
+                      ),
+                    ],
             ),
-            boxShadow: [
-              BoxShadow(
-                color: primaryColor.withValues(alpha: 0.4),
-                blurRadius: 30,
-                spreadRadius: 8,
-              ),
-              BoxShadow(
-                color: secondaryColor.withValues(alpha: 0.3),
-                blurRadius: 60,
-                spreadRadius: 20,
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Status Icon
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.25),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.5),
-                    width: 2,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Status Icon
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: 0.25),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.5),
+                      width: 2,
+                    ),
+                  ),
+                  child: isLoading
+                      ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Icon(
+                          isSafe ? Icons.check : Icons.priority_high,
+                          color: Colors.white,
+                          size: 28,
+                        ),
+                ),
+                const SizedBox(height: 16),
+
+                // Status Text
+                Text(
+                  isLoading ? "LOADING..." : (isSafe ? "I'M SAFE" : "I'M OK!"),
+                  style: GoogleFonts.inter(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white,
+                    letterSpacing: 1,
                   ),
                 ),
-                child: Icon(
-                  isSafe ? Icons.check : Icons.priority_high,
-                  color: Colors.white,
-                  size: 28,
-                ),
-              ),
-              const SizedBox(height: 16),
+                const SizedBox(height: 8),
 
-              // Status Text
-              Text(
-                isSafe ? "I'M SAFE" : "I'M OK!",
-                style: GoogleFonts.inter(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w900,
-                  color: Colors.white,
-                  letterSpacing: 1,
+                // Subtitle
+                Text(
+                  isLoading
+                      ? "Syncing status..."
+                      : (isVacationMode
+                          ? "Disabled during"
+                          : "Tap to tell family I'm"),
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white.withValues(alpha: 0.9),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-
-              // Subtitle
-              Text(
-                "Tap to tell family I'm",
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.white.withValues(alpha: 0.9),
+                Text(
+                  isLoading
+                      ? ""
+                      : (isVacationMode ? "vacation mode" : "okay"),
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white.withValues(alpha: 0.9),
+                  ),
                 ),
-              ),
-              Text(
-                "okay",
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.white.withValues(alpha: 0.9),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -704,7 +908,10 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             Icons.settings_outlined,
             isDarkMode,
             onTap: () {
-              // Navigate to settings
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
             },
           ),
         ],

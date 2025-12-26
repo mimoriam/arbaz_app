@@ -1183,8 +1183,9 @@ class _CalendarScreenState extends State<CalendarScreen>
   IconData _getIssueIcon(String issue) {
     final lowerIssue = issue.toLowerCase();
     if (lowerIssue.contains('crav')) return Icons.smoke_free;
-    if (lowerIssue.contains('mood') || lowerIssue.contains('irritab'))
+    if (lowerIssue.contains('mood') || lowerIssue.contains('irritab')) {
       return Icons.mood_bad;
+    }
     if (lowerIssue.contains('sleep')) return Icons.bedtime;
     if (lowerIssue.contains('anxi')) return Icons.psychology;
     if (lowerIssue.contains('stress')) return Icons.sentiment_dissatisfied;
