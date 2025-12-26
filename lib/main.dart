@@ -1,3 +1,4 @@
+import 'package:arbaz_app/screens/auth/login/login_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/theme_provider.dart';
@@ -26,12 +27,9 @@ class MainApp extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           theme: SafeCheckTheme.lightTheme,
           darkTheme: SafeCheckTheme.darkTheme,
-          themeMode: themeProvider.themeMode,
-          home: const Scaffold(
-            body: Center(
-              child: Text('Hello World!'),
-            ),
-          ),
+          themeMode: ThemeMode.light,
+          // themeMode: themeProvider.themeMode,
+          home: LoginScreen()
         );
       },
     );

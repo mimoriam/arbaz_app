@@ -59,6 +59,18 @@ class SafeCheckTheme {
           borderRadius: BorderRadius.circular(_inputRadius),
           borderSide: const BorderSide(color: AppColors.borderLight),
         ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(_inputRadius),
+          borderSide: const BorderSide(color: AppColors.primaryBlue, width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(_inputRadius),
+          borderSide: const BorderSide(color: AppColors.dangerRed),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(_inputRadius),
+          borderSide: const BorderSide(color: AppColors.dangerRed, width: 1.5),
+        ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
         hintStyle: GoogleFonts.inter(color: AppColors.textSecondary),
       ),
