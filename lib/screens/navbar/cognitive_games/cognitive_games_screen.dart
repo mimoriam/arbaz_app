@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/speed_tap.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/memory_match.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 /// Model for a cognitive game
@@ -141,18 +143,57 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
   }
 
   void _onGameTap(CognitiveGame game) {
-    // TODO: Navigate to the specific game screen
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${game.name} coming soon!',
-          style: GoogleFonts.inter(fontWeight: FontWeight.w600),
-        ),
-        backgroundColor: AppColors.primaryBlue,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+    Widget? gameScreen;
+
+    // Navigate to the specific game screen based on game name
+    switch (game.name) {
+      case 'Speed Tap':
+        gameScreen = const SpeedTapScreen();
+        break;
+      case 'Memory Match':
+        gameScreen = const MemoryMatchScreen();
+        break;
+      default:
+        // Show coming soon for other games
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${game.name} coming soon!',
+              style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+            ),
+            backgroundColor: AppColors.primaryBlue,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+        return;
+    }
+
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => gameScreen!,
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: animation,
+            child: SlideTransition(
+              position:
+                  Tween<Offset>(
+                    begin: const Offset(0.05, 0),
+                    end: Offset.zero,
+                  ).animate(
+                    CurvedAnimation(
+                      parent: animation,
+                      curve: Curves.easeOutCubic,
+                    ),
+                  ),
+              child: child,
+            ),
+          );
+        },
+        transitionDuration: const Duration(milliseconds: 300),
       ),
     );
   }
@@ -162,8 +203,9 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor:
-          isDarkMode ? AppColors.backgroundDark : AppColors.backgroundLight,
+      backgroundColor: isDarkMode
+          ? AppColors.backgroundDark
+          : AppColors.backgroundLight,
       body: SafeArea(
         child: FadeTransition(
           opacity: _fadeAnimation,
@@ -176,8 +218,10 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
               // Games List
               Expanded(
                 child: ListView.builder(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 16,
+                  ),
                   itemCount: _games.length,
                   itemBuilder: (context, index) {
                     return TweenAnimationBuilder<double>(
@@ -187,10 +231,7 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
                       builder: (context, value, child) {
                         return Transform.translate(
                           offset: Offset(0, 20 * (1 - value)),
-                          child: Opacity(
-                            opacity: value,
-                            child: child,
-                          ),
+                          child: Opacity(opacity: value, child: child),
                         );
                       },
                       child: _buildGameCard(_games[index], isDarkMode),
@@ -251,8 +292,9 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
                 color: isDarkMode ? AppColors.surfaceDark : Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color:
-                      isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+                  color: isDarkMode
+                      ? AppColors.borderDark
+                      : AppColors.borderLight,
                 ),
               ),
               child: Icon(
@@ -303,11 +345,7 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
                     : game.iconBackgroundColor,
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: Icon(
-                game.icon,
-                color: game.iconColor,
-                size: 28,
-              ),
+              child: Icon(game.icon, color: game.iconColor, size: 28),
             ),
             const SizedBox(width: 16),
 

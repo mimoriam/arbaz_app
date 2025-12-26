@@ -35,7 +35,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // Step Options
   bool _healthQuizEnabled = true;
-  bool _brainGamesEnabled = true;
 
   // Identity
   final String _userName = 'Annie';
