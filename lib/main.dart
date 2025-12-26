@@ -8,9 +8,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(
     MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => ThemeProvider()),
-      ],
+      providers: [ChangeNotifierProvider(create: (_) => ThemeProvider())],
       child: const MainApp(),
     ),
   );
@@ -29,10 +27,9 @@ class MainApp extends StatelessWidget {
           darkTheme: SafeCheckTheme.darkTheme,
           themeMode: ThemeMode.light,
           // themeMode: themeProvider.themeMode,
-          home: LoginScreen()
+          home: LoginScreen(),
         );
       },
     );
   }
 }
-

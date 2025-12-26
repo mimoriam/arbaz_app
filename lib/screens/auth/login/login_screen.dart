@@ -33,9 +33,7 @@ class _LoginScreenState extends State<LoginScreen> {
         if (mounted) {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (_) => const QuestionnaireScreen(),
-            ),
+            MaterialPageRoute(builder: (_) => const QuestionnaireScreen()),
           );
         }
       } catch (e) {
@@ -99,7 +97,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           ]),
                         ),
                         const SizedBox(height: 20),
-  
+
                         // Password Field
                         FormBuilderTextField(
                           name: 'password',
@@ -132,10 +130,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     onPressed: _isLoading
                         ? null
                         : () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const ForgotPassScreen()),
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const ForgotPassScreen(),
                             ),
+                          ),
                     child: const Text(
                       'Forgot Password?',
                       style: TextStyle(color: AppColors.primaryBlue),
@@ -151,8 +150,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           width: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.white),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
                           ),
                         )
                       : const Text('Login'),
@@ -169,10 +169,11 @@ class _LoginScreenState extends State<LoginScreen> {
                       onPressed: _isLoading
                           ? null
                           : () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) => const RegisterScreen()),
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const RegisterScreen(),
                               ),
+                            ),
                       child: const Text(
                         'Register',
                         style: TextStyle(

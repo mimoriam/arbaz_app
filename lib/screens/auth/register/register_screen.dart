@@ -87,7 +87,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         validator: FormBuilderValidators.required(),
                       ),
                       const SizedBox(height: 20),
-  
+
                       // Email Field
                       FormBuilderTextField(
                         name: 'email',
@@ -105,7 +105,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ]),
                       ),
                       const SizedBox(height: 20),
-  
+
                       // Password Field
                       FormBuilderTextField(
                         name: 'password',
@@ -134,7 +134,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ]),
                       ),
                       const SizedBox(height: 20),
-  
+
                       // Confirm Password Field
                       FormBuilderTextField(
                         name: 'confirm_password',
@@ -158,7 +158,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           FormBuilderValidators.required(),
                           (value) {
                             final password = _formKey
-                                .currentState?.fields['password']?.value;
+                                .currentState
+                                ?.fields['password']
+                                ?.value;
                             if (value != password) {
                               return 'Passwords do not match';
                             }
@@ -178,8 +180,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           width: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.white),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
                           ),
                         )
                       : const Text('Register'),

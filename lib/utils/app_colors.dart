@@ -7,7 +7,7 @@ class AppColors {
   // Primary Palette
   static const Color primaryBlue = Color(0xFF246BFD);
   static const Color primaryBlueLight = Color(0xFFE9F0FF);
-  
+
   // Status & Actions
   static const Color successGreen = Color(0xFF22C55E);
   static const Color dangerRed = Color(0xFFF43F5E);

@@ -1,3 +1,4 @@
+import 'package:arbaz_app/screens/navbar/home/home_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 
@@ -43,9 +44,9 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen> {
                 Text(
                   'SafeCheck',
                   style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                        fontSize: 32,
-                        letterSpacing: -1.0,
-                      ),
+                    fontSize: 32,
+                    letterSpacing: -1.0,
+                  ),
                 ),
                 const SizedBox(height: 8),
 
@@ -54,11 +55,11 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen> {
                   'Keeping seniors safe and families\nconnected.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: isDarkMode
-                            ? Colors.grey[400]
-                            : AppColors.textSecondary,
-                        height: 1.5,
-                      ),
+                    color: isDarkMode
+                        ? Colors.grey[400]
+                        : AppColors.textSecondary,
+                    height: 1.5,
+                  ),
                 ),
                 const SizedBox(height: 28),
 
@@ -70,7 +71,12 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen> {
                   icon: Icons.home_outlined,
                   color: AppColors.primaryBlue,
                   onTap: () {
-                    // Navigate or set state
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const SeniorHomeScreen(),
+                      ),
+                    );
                   },
                 ),
                 const SizedBox(height: 16),
@@ -83,7 +89,12 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen> {
                   icon: Icons.people_outline,
                   color: AppColors.successGreen,
                   onTap: () {
-                    // Navigate or set state
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const FamilyHomeScreen(),
+                      ),
+                    );
                   },
                 ),
 
@@ -130,28 +141,24 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen> {
                       Text(
                         title,
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.bold,
-                              color: isDarkMode
-                                  ? Colors.white
-                                  : AppColors.textPrimary,
-                            ),
+                          fontWeight: FontWeight.bold,
+                          color: isDarkMode
+                              ? Colors.white
+                              : AppColors.textPrimary,
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         subtitle,
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Colors.grey.shade500,
-                              fontWeight: FontWeight.w600,
-                            ),
+                          color: Colors.grey.shade500,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ],
                   ),
                 ),
-                Icon(
-                  icon,
-                  size: 32,
-                  color: color,
-                ),
+                Icon(icon, size: 32, color: color),
               ],
             ),
           ),
