@@ -593,44 +593,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
 
           // Brain Games
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Brain Games',
-                        style: GoogleFonts.inter(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: isDarkMode
-                              ? AppColors.textPrimaryDark
-                              : AppColors.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Mind sharpener',
-                        style: GoogleFonts.inter(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w400,
-                          color: isDarkMode
-                              ? AppColors.textSecondaryDark
-                              : AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                _buildToggle(_brainGamesEnabled, (value) {
-                  setState(() => _brainGamesEnabled = value);
-                }),
-              ],
-            ),
-          ),
+          // Padding(
+          //   padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
+          //   child: Row(
+          //     children: [
+          //       Expanded(
+          //         child: Column(
+          //           crossAxisAlignment: CrossAxisAlignment.start,
+          //           children: [
+          //             Text(
+          //               'Brain Games',
+          //               style: GoogleFonts.inter(
+          //                 fontSize: 16,
+          //                 fontWeight: FontWeight.w600,
+          //                 color: isDarkMode
+          //                     ? AppColors.textPrimaryDark
+          //                     : AppColors.textPrimary,
+          //               ),
+          //             ),
+          //             const SizedBox(height: 2),
+          //             Text(
+          //               'Mind sharpener',
+          //               style: GoogleFonts.inter(
+          //                 fontSize: 13,
+          //                 fontWeight: FontWeight.w400,
+          //                 color: isDarkMode
+          //                     ? AppColors.textSecondaryDark
+          //                     : AppColors.textSecondary,
+          //               ),
+          //             ),
+          //           ],
+          //         ),
+          //       ),
+          //       _buildToggle(_brainGamesEnabled, (value) {
+          //         setState(() => _brainGamesEnabled = value);
+          //       }),
+          //     ],
+          //   ),
+          // ),
         ],
       ),
     );
