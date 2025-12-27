@@ -70,13 +70,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     // Add haptic feedback for better UX
     HapticFeedback.mediumImpact();
 
-    // If already checked in today, just toggle the visual state
+    // Button is not clickable after check-in, so no toggle needed
+    // This check is redundant now but kept for safety
     if (_hasCheckedInToday) {
-      setState(() {
-        _currentStatus = _currentStatus == SafetyStatus.safe
-            ? SafetyStatus.ok
-            : SafetyStatus.safe;
-      });
       return;
     }
 
@@ -90,7 +86,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           onComplete: () {
             setState(() {
               _hasCheckedInToday = true;
-              _currentStatus = SafetyStatus.ok;
+              _currentStatus = SafetyStatus.safe; // Now shows blue "I'M SAFE" button
               _currentStreak++; // Increment streak on successful check-in
               // Stop pulse animation after successful check-in
               _pulseController.stop();
@@ -484,122 +480,165 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     bool isVacationMode = false,
     bool isLoading = false,
   }) {
-    final bool isSafe = _currentStatus == SafetyStatus.safe;
-    final Color primaryColor = (isVacationMode || isLoading)
-        ? Colors.grey.shade400 // Gray when vacation mode is on or loading
-        : (isSafe
-            ? const Color(0xFF3B9EFF) // Bright blue
-            : const Color(0xFFFFBF00)); // Golden yellow
-    final Color secondaryColor = (isVacationMode || isLoading)
-        ? Colors.grey.shade500 // Darker gray when vacation mode is on or loading
-        : (isSafe
-            ? const Color(0xFF1E7AE5) // Darker blue
-            : const Color(0xFFE5A800)); // Darker yellow
+    // Determine the button state and colors based on check-in status
+    // Green: Default (not checked in) - clickable
+    // Blue: After questionnaire completed - NOT clickable
+    // Yellow: Running late (SafetyStatus.ok without questionnaire completion)
+    
+    Color primaryColor;
+    Color secondaryColor;
+    Color ringColor;
+    IconData statusIcon;
+    String statusText;
+    String subtitleText;
+    bool isClickable;
+
+    if (isVacationMode || isLoading) {
+      // Disabled state
+      primaryColor = Colors.grey.shade400;
+      secondaryColor = Colors.grey.shade500;
+      ringColor = Colors.grey.shade300;
+      statusIcon = Icons.check;
+      statusText = isLoading ? "LOADING..." : "I'M OK";
+      subtitleText = isLoading ? "Syncing status..." : "Disabled during vacation";
+      isClickable = false;
+    } else if (_hasCheckedInToday) {
+      // Blue state - completed questionnaire (not clickable)
+      primaryColor = const Color(0xFF4DA6FF); // Light blue
+      secondaryColor = const Color(0xFF2B8FE5); // Darker blue
+      ringColor = const Color(0xFF7EC8FF); // Ring color
+      statusIcon = Icons.check;
+      statusText = "I'M SAFE";
+      subtitleText = "Tap to tell family I'm okay";
+      isClickable = false; // Not clickable after completion
+    } else if (_currentStatus == SafetyStatus.ok) {
+      // Yellow state - running late
+      primaryColor = const Color(0xFFFFBF00); // Golden yellow
+      secondaryColor = const Color(0xFFE5A800); // Darker yellow
+      ringColor = const Color(0xFFFFD966); // Light yellow ring
+      statusIcon = Icons.priority_high;
+      statusText = "I'M OK!";
+      subtitleText = "Tap to tell family I'm okay";
+      isClickable = true;
+    } else {
+      // Green state - default (not checked in)
+      primaryColor = const Color(0xFF2ECC71); // Vibrant green
+      secondaryColor = const Color(0xFF27AE60); // Darker green
+      ringColor = const Color(0xFF58D68D); // Light green ring
+      statusIcon = Icons.favorite;
+      statusText = "I'M OK";
+      subtitleText = "Tap to tell family I'm okay";
+      isClickable = true;
+    }
 
     return AnimatedBuilder(
       animation: _pulseAnimation,
       builder: (context, child) {
         return Transform.scale(
-          scale: isVacationMode ? 1.0 : _pulseAnimation.value,
+          // Only pulse if clickable and not in vacation mode
+          scale: (isVacationMode || !isClickable) ? 1.0 : _pulseAnimation.value,
           child: child,
         );
       },
       child: GestureDetector(
-        onTap: (isVacationMode || isLoading) ? null : _onStatusButtonTap,
+        onTap: isClickable ? _onStatusButtonTap : null,
         child: Opacity(
           opacity: (isVacationMode || isLoading) ? 0.5 : 1.0,
           child: Container(
-            width: 220,
-            height: 220,
+            width: 240,
+            height: 240,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              gradient: RadialGradient(
-                colors: [primaryColor, secondaryColor],
-                center: Alignment.topCenter,
-                radius: 0.8,
+              // Outer ring effect
+              border: Border.all(
+                color: ringColor.withValues(alpha: 0.6),
+                width: 8,
               ),
-              boxShadow: isVacationMode
-                  ? [] // No shadow when disabled
+              boxShadow: (isVacationMode || !isClickable)
+                  ? [] // No shadow when disabled or after completion
                   : [
                       BoxShadow(
-                        color: primaryColor.withValues(alpha: 0.4),
+                        color: primaryColor.withValues(alpha: 0.3),
                         blurRadius: 30,
-                        spreadRadius: 8,
+                        spreadRadius: 5,
                       ),
                       BoxShadow(
-                        color: secondaryColor.withValues(alpha: 0.3),
+                        color: secondaryColor.withValues(alpha: 0.2),
                         blurRadius: 60,
-                        spreadRadius: 20,
+                        spreadRadius: 15,
                       ),
                     ],
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                // Status Icon
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.25),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.5),
-                      width: 2,
+            child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [primaryColor, secondaryColor],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Status Icon in white circle
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.95),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.1),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: isLoading
+                        ? Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 3,
+                              color: primaryColor,
+                            ),
+                          )
+                        : Icon(
+                            statusIcon,
+                            color: primaryColor,
+                            size: 28,
+                          ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Status Text
+                  Text(
+                    statusText,
+                    style: GoogleFonts.inter(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                      letterSpacing: 1,
                     ),
                   ),
-                  child: isLoading
-                      ? const Padding(
-                          padding: EdgeInsets.all(12),
-                          child: CircularProgressIndicator(
-                            strokeWidth: 3,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Icon(
-                          isSafe ? Icons.check : Icons.priority_high,
-                          color: Colors.white,
-                          size: 28,
-                        ),
-                ),
-                const SizedBox(height: 16),
+                  const SizedBox(height: 6),
 
-                // Status Text
-                Text(
-                  isLoading ? "LOADING..." : (isSafe ? "I'M SAFE" : "I'M OK!"),
-                  style: GoogleFonts.inter(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white,
-                    letterSpacing: 1,
+                  // Subtitle
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Text(
+                      subtitleText,
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white.withValues(alpha: 0.9),
+                      ),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-
-                // Subtitle
-                Text(
-                  isLoading
-                      ? "Syncing status..."
-                      : (isVacationMode
-                          ? "Disabled during"
-                          : "Tap to tell family I'm"),
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white.withValues(alpha: 0.9),
-                  ),
-                ),
-                Text(
-                  isLoading
-                      ? ""
-                      : (isVacationMode ? "vacation mode" : "okay"),
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white.withValues(alpha: 0.9),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
