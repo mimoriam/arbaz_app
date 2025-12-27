@@ -1,8 +1,14 @@
+import 'dart:io';
+
+import 'package:arbaz_app/services/auth_state.dart';
+import 'package:arbaz_app/services/firestore_service.dart';
+import 'package:arbaz_app/models/user_model.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'package:form_builder_validators/form_builder_validators.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -16,7 +22,6 @@ class _RegisterScreenState extends State<RegisterScreen>
   final _formKey = GlobalKey<FormBuilderState>();
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
-  bool _isLoading = false;
   bool _acceptedTerms = false;
   String _password = '';
   double _passwordStrength = 0;
@@ -100,412 +105,448 @@ class _RegisterScreenState extends State<RegisterScreen>
 
   Future<void> _handleRegister() async {
     if (!_acceptedTerms) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Please accept Terms & Conditions to continue.',
-            style: GoogleFonts.inter(),
-          ),
-          backgroundColor: AppColors.warningOrange,
-        ),
-      );
+      _showMessage('Please accept Terms & Conditions to continue.',
+          AppColors.warningOrange);
       return;
     }
 
-    if (_formKey.currentState?.saveAndValidate() ?? false) {
-      setState(() => _isLoading = true);
+    if (!(_formKey.currentState?.saveAndValidate() ?? false)) return;
 
-      try {
-        // TODO: Implement actual registration logic
-        await Future.delayed(const Duration(seconds: 1)); // Simulated delay
+    final authState = context.read<AuthState>();
+    final firestoreService = context.read<FirestoreService>();
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Account created successfully!',
-                style: GoogleFonts.inter(),
-              ),
-              backgroundColor: AppColors.successGreen,
-            ),
+    final name = _formKey.currentState?.fields['name']?.value as String;
+    final email = _formKey.currentState?.fields['email']?.value as String;
+    final password =
+        _formKey.currentState?.fields['password']?.value as String;
+
+    final result =
+        await authState.registerWithEmail(email, password, name);
+
+    if (!mounted) return;
+
+    switch (result) {
+      case AuthSuccess(:final data):
+        final user = data.user;
+        if (user == null) {
+          _showMessage('Registration failed. Please try again.', AppColors.dangerRed);
+          return;
+        }
+
+        // Create user profile and default roles
+        final profile = UserProfile(
+          uid: user.uid,
+          email: user.email ?? email,
+          displayName: name,
+          createdAt: DateTime.now(),
+          lastLoginAt: DateTime.now(),
+        );
+        final roles = UserRoles();
+
+        try {
+          await firestoreService.createUserWithRoles(user.uid, profile, roles);
+
+          if (!mounted) return;
+          _showMessage('Account created successfully!', AppColors.successGreen);
+          // Pop back to AuthGate which will redirect to QuestionnaireScreen
+          if (context.mounted) {
+            Navigator.of(context).popUntil((route) => route.isFirst);
+          }
+        } catch (e) {
+          // Rollback: delete the Firebase Auth user on Firestore failure
+          try {
+            await user.delete();
+          } catch (_) {
+            // Rollback failed - user may need to contact support
+          }
+          if (!mounted) return;
+          _showMessage(
+            'Failed to create profile. Please try again.',
+            AppColors.dangerRed,
           );
-          Navigator.pop(context);
         }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Error: ${e.toString()}',
-                style: GoogleFonts.inter(),
-              ),
-              backgroundColor: Colors.red,
-            ),
-          );
+      case AuthFailure(:final error):
+        if (error.isNotEmpty) {
+          _showMessage(error, AppColors.dangerRed);
         }
-      } finally {
-        if (mounted) {
-          setState(() => _isLoading = false);
-        }
-      }
     }
   }
 
   Future<void> _handleGoogleSignIn() async {
     if (!_acceptedTerms) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Please accept Terms & Conditions to continue.',
-            style: GoogleFonts.inter(),
-          ),
-          backgroundColor: AppColors.warningOrange,
-        ),
-      );
+      _showMessage('Please accept Terms & Conditions to continue.',
+          AppColors.warningOrange);
       return;
     }
 
-    setState(() => _isLoading = true);
-    try {
-      // TODO: Implement Google Sign In
-      await Future.delayed(const Duration(seconds: 1));
-      if (mounted) {
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Google Sign In failed. Please try again.',
-              style: GoogleFonts.inter(),
-            ),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+    final authState = context.read<AuthState>();
+    final firestoreService = context.read<FirestoreService>();
+
+    final result = await authState.signInWithGoogle();
+
+    if (!mounted) return;
+
+    switch (result) {
+      case AuthSuccess(:final data):
+        final user = data?.user;
+        if (user == null) {
+          _showMessage('Sign-in failed. Please try again.', AppColors.dangerRed);
+          return;
+        }
+
+        try {
+          // Check if profile exists
+          final existingProfile = await firestoreService.getUserProfile(user.uid);
+
+          if (existingProfile == null) {
+            // Create new profile
+            final profile = UserProfile(
+              uid: user.uid,
+              email: user.email ?? '',
+              displayName: user.displayName,
+              photoUrl: user.photoURL,
+              createdAt: DateTime.now(),
+              lastLoginAt: DateTime.now(),
+            );
+            final roles = UserRoles();
+            await firestoreService.createUserWithRoles(user.uid, profile, roles);
+          }
+
+          if (!mounted) return;
+          // Pop back to AuthGate which will redirect to QuestionnaireScreen
+          if (context.mounted) {
+            Navigator.of(context).popUntil((route) => route.isFirst);
+          }
+        } catch (e) {
+          // Rollback: sign out to avoid leaving user authenticated without profile
+          debugPrint('Profile creation/lookup failed during Google sign-in: $e');
+          try {
+            await authState.signOut();
+          } catch (signOutError) {
+            debugPrint('Rollback sign-out failed: $signOutError');
+          }
+          if (!mounted) return;
+          _showMessage(
+            'Failed to create profile. Please try again.',
+            AppColors.dangerRed,
+          );
+        }
+      case AuthFailure(:final error):
+        if (error.isNotEmpty) {
+          _showMessage(error, AppColors.dangerRed);
+        }
     }
   }
-  Future<void> _handleAppleSignIn() async {
-    setState(() => _isLoading = true);
-    try {
-      // TODO: Implement Apple Sign In
-      await Future.delayed(const Duration(seconds: 1));
-      if (mounted) {
-        Navigator.pop(context);
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Apple Sign In failed. Please try again.',
-              style: GoogleFonts.inter(),
-            ),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
+
+  void _showMessage(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: GoogleFonts.inter()),
+        backgroundColor: color,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-    return Scaffold(
-      backgroundColor:
-          isDarkMode ? AppColors.backgroundDark : AppColors.backgroundLight,
-      // appBar: AppBar(
-      //   backgroundColor: Colors.transparent,
-      //   elevation: 0,
-      //   iconTheme: IconThemeData(
-      //     color:
-      //         isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
-      //   ),
-      // ),
-      body: GestureDetector(
-        onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
-        child: SafeArea(
-          child: FadeTransition(
-            opacity: _fadeAnimation,
-            child: SlideTransition(
-              position: _slideAnimation,
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Create Account',
-                      style: GoogleFonts.inter(
-                        fontSize: 32,
-                        fontWeight: FontWeight.w800,
-                        color: isDarkMode
-                            ? AppColors.textPrimaryDark
-                            : AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Sign up to get started',
-                      style: GoogleFonts.inter(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w400,
-                        color: isDarkMode
-                            ? AppColors.textSecondaryDark
-                            : AppColors.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
+    return Consumer<AuthState>(
+      builder: (context, authState, child) {
+        final isLoading = authState.isLoading;
 
-                    // Social Sign In Buttons
-                    _buildSocialButton(
-                      onPressed: _isLoading ? null : _handleGoogleSignIn,
-                      icon: 'G',
-                      label: 'Sign up with Google',
-                      isDarkMode: isDarkMode,
-                      iconColor: Colors.red,
-                    ),
-                    const SizedBox(height: 12),
-                    _buildSocialButton(
-                      onPressed: _isLoading ? null : _handleAppleSignIn,
-                      icon: '',
-                      label: 'Sign up with Apple',
-                      isDarkMode: isDarkMode,
-                      iconColor:
-                          isDarkMode ? Colors.white : AppColors.textPrimary,
-                      useAppleIcon: true,
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Divider with "OR"
-                    Row(
+        return Scaffold(
+          backgroundColor: isDarkMode
+              ? AppColors.backgroundDark
+              : AppColors.backgroundLight,
+          body: GestureDetector(
+            onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+            child: SafeArea(
+              child: FadeTransition(
+                opacity: _fadeAnimation,
+                child: SlideTransition(
+                  position: _slideAnimation,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(24.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Divider(
+                        Text(
+                          'Create Account',
+                          style: GoogleFonts.inter(
+                            fontSize: 32,
+                            fontWeight: FontWeight.w800,
                             color: isDarkMode
-                                ? AppColors.borderDark
-                                : AppColors.borderLight,
+                                ? AppColors.textPrimaryDark
+                                : AppColors.textPrimary,
                           ),
                         ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: Text(
-                            'OR',
-                            style: GoogleFonts.inter(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                              color: isDarkMode
-                                  ? AppColors.textSecondaryDark
-                                  : AppColors.textSecondary,
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          child: Divider(
+                        const SizedBox(height: 8),
+                        Text(
+                          'Sign up to get started',
+                          style: GoogleFonts.inter(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w400,
                             color: isDarkMode
-                                ? AppColors.borderDark
-                                : AppColors.borderLight,
+                                ? AppColors.textSecondaryDark
+                                : AppColors.textSecondary,
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
+                        const SizedBox(height: 16),
 
-                    FormBuilder(
-                      key: _formKey,
-                      child: Column(
-                        children: [
-                          // Full Name Field
-                          FormBuilderTextField(
-                            name: 'name',
-                            enabled: !_isLoading,
-                            autofillHints: const [AutofillHints.name],
-                            keyboardType: TextInputType.name,
-                            textInputAction: TextInputAction.next,
-                            textCapitalization: TextCapitalization.words,
-                            style: GoogleFonts.inter(
-                              color: isDarkMode
-                                  ? AppColors.textPrimaryDark
-                                  : AppColors.textPrimary,
-                            ),
-                            decoration: InputDecoration(
-                              hintText: 'Full Name',
-                              hintStyle: GoogleFonts.inter(
-                                color: isDarkMode
-                                    ? AppColors.textSecondaryDark
-                                    : AppColors.textSecondary,
-                              ),
-                              prefixIcon: const Icon(Icons.person_outline),
-                            ),
-                            validator: FormBuilderValidators.required(),
-                          ),
-                          const SizedBox(height: 16),
+                        // Social Sign In Buttons
+                        _buildSocialButton(
+                          onPressed: isLoading ? null : _handleGoogleSignIn,
+                          icon: 'G',
+                          label: 'Sign up with Google',
+                          isDarkMode: isDarkMode,
+                          iconColor: Colors.red,
+                        ),
 
-                          // Email Field
-                          FormBuilderTextField(
-                            name: 'email',
-                            enabled: !_isLoading,
-                            autofillHints: const [AutofillHints.email],
-                            keyboardType: TextInputType.emailAddress,
-                            textInputAction: TextInputAction.next,
-                            style: GoogleFonts.inter(
-                              color: isDarkMode
-                                  ? AppColors.textPrimaryDark
-                                  : AppColors.textPrimary,
-                            ),
-                            decoration: InputDecoration(
-                              hintText: 'Email',
-                              hintStyle: GoogleFonts.inter(
-                                color: isDarkMode
-                                    ? AppColors.textSecondaryDark
-                                    : AppColors.textSecondary,
-                              ),
-                              prefixIcon: const Icon(Icons.email_outlined),
-                            ),
-                            validator: FormBuilderValidators.compose([
-                              FormBuilderValidators.required(),
-                              FormBuilderValidators.email(),
-                            ]),
-                          ),
-                          const SizedBox(height: 16),
-
-                          // Password Field
-                          FormBuilderTextField(
-                            name: 'password',
-                            enabled: !_isLoading,
-                            obscureText: _obscurePassword,
-                            autofillHints: const [AutofillHints.newPassword],
-                            textInputAction: TextInputAction.next,
-                            style: GoogleFonts.inter(
-                              color: isDarkMode
-                                  ? AppColors.textPrimaryDark
-                                  : AppColors.textPrimary,
-                            ),
-                            onChanged: (value) =>
-                                _updatePasswordStrength(value ?? ''),
-                            decoration: InputDecoration(
-                              hintText: 'Password',
-                              hintStyle: GoogleFonts.inter(
-                                color: isDarkMode
-                                    ? AppColors.textSecondaryDark
-                                    : AppColors.textSecondary,
-                              ),
-                              prefixIcon: const Icon(Icons.lock_outline),
-                              suffixIcon: IconButton(
-                                icon: Icon(
-                                  _obscurePassword
-                                      ? Icons.visibility_off_outlined
-                                      : Icons.visibility_outlined,
-                                ),
-                                onPressed: _togglePasswordVisibility,
-                              ),
-                            ),
-                            validator: FormBuilderValidators.compose([
-                              FormBuilderValidators.required(),
-                              FormBuilderValidators.minLength(
-                                8,
-                                errorText:
-                                    'Password must be at least 8 characters',
-                              ),
-                            ]),
-                          ),
-
-                          // Password Strength Meter
-                          if (_password.isNotEmpty) ...[
-                            const SizedBox(height: 12),
-                            _buildPasswordStrengthMeter(isDarkMode),
-                          ],
-                          const SizedBox(height: 16),
-
-                          // Confirm Password Field
-                          FormBuilderTextField(
-                            name: 'confirm_password',
-                            enabled: !_isLoading,
-                            obscureText: _obscureConfirmPassword,
-                            textInputAction: TextInputAction.done,
-                            onSubmitted: (_) => _handleRegister(),
-                            style: GoogleFonts.inter(
-                              color: isDarkMode
-                                  ? AppColors.textPrimaryDark
-                                  : AppColors.textPrimary,
-                            ),
-                            decoration: InputDecoration(
-                              hintText: 'Confirm Password',
-                              hintStyle: GoogleFonts.inter(
-                                color: isDarkMode
-                                    ? AppColors.textSecondaryDark
-                                    : AppColors.textSecondary,
-                              ),
-                              prefixIcon: const Icon(Icons.lock_outline),
-                              suffixIcon: IconButton(
-                                icon: Icon(
-                                  _obscureConfirmPassword
-                                      ? Icons.visibility_off_outlined
-                                      : Icons.visibility_outlined,
-                                ),
-                                onPressed: _toggleConfirmPasswordVisibility,
-                              ),
-                            ),
-                            validator: FormBuilderValidators.compose([
-                              FormBuilderValidators.required(),
-                              (value) {
-                                if (value != _password) {
-                                  return 'Passwords do not match';
-                                }
-                                return null;
-                              },
-                            ]),
+                        // Apple Sign In - hidden on Android
+                        if (!Platform.isAndroid) ...[
+                          const SizedBox(height: 12),
+                          _buildSocialButton(
+                            onPressed: null, // Not implemented yet
+                            icon: '',
+                            label: 'Sign up with Apple',
+                            isDarkMode: isDarkMode,
+                            iconColor: isDarkMode
+                                ? Colors.white
+                                : AppColors.textPrimary,
+                            useAppleIcon: true,
                           ),
                         ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
+                        const SizedBox(height: 16),
 
-                    // Terms and Conditions Checkbox
-                    _buildTermsCheckbox(isDarkMode),
-
-                    const SizedBox(height: 24),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _isLoading ? null : _handleRegister,
-                        child: _isLoading
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
-                                  ),
-                                ),
-                              )
-                            : Text(
-                                'Register',
+                        // Divider with "OR"
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Divider(
+                                color: isDarkMode
+                                    ? AppColors.borderDark
+                                    : AppColors.borderLight,
+                              ),
+                            ),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              child: Text(
+                                'OR',
                                 style: GoogleFonts.inter(
-                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: isDarkMode
+                                      ? AppColors.textSecondaryDark
+                                      : AppColors.textSecondary,
                                 ),
                               ),
-                      ),
+                            ),
+                            Expanded(
+                              child: Divider(
+                                color: isDarkMode
+                                    ? AppColors.borderDark
+                                    : AppColors.borderLight,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+
+                        FormBuilder(
+                          key: _formKey,
+                          child: Column(
+                            children: [
+                              // Full Name Field
+                              FormBuilderTextField(
+                                name: 'name',
+                                enabled: !isLoading,
+                                autofillHints: const [AutofillHints.name],
+                                keyboardType: TextInputType.name,
+                                textInputAction: TextInputAction.next,
+                                textCapitalization: TextCapitalization.words,
+                                style: GoogleFonts.inter(
+                                  color: isDarkMode
+                                      ? AppColors.textPrimaryDark
+                                      : AppColors.textPrimary,
+                                ),
+                                decoration: InputDecoration(
+                                  hintText: 'Full Name',
+                                  hintStyle: GoogleFonts.inter(
+                                    color: isDarkMode
+                                        ? AppColors.textSecondaryDark
+                                        : AppColors.textSecondary,
+                                  ),
+                                  prefixIcon:
+                                      const Icon(Icons.person_outline),
+                                ),
+                                validator: FormBuilderValidators.required(),
+                              ),
+                              const SizedBox(height: 16),
+
+                              // Email Field
+                              FormBuilderTextField(
+                                name: 'email',
+                                enabled: !isLoading,
+                                autofillHints: const [AutofillHints.email],
+                                keyboardType: TextInputType.emailAddress,
+                                textInputAction: TextInputAction.next,
+                                style: GoogleFonts.inter(
+                                  color: isDarkMode
+                                      ? AppColors.textPrimaryDark
+                                      : AppColors.textPrimary,
+                                ),
+                                decoration: InputDecoration(
+                                  hintText: 'Email',
+                                  hintStyle: GoogleFonts.inter(
+                                    color: isDarkMode
+                                        ? AppColors.textSecondaryDark
+                                        : AppColors.textSecondary,
+                                  ),
+                                  prefixIcon: const Icon(Icons.email_outlined),
+                                ),
+                                validator: FormBuilderValidators.compose([
+                                  FormBuilderValidators.required(),
+                                  FormBuilderValidators.email(),
+                                ]),
+                              ),
+                              const SizedBox(height: 16),
+
+                              // Password Field
+                              FormBuilderTextField(
+                                name: 'password',
+                                enabled: !isLoading,
+                                obscureText: _obscurePassword,
+                                autofillHints: const [
+                                  AutofillHints.newPassword
+                                ],
+                                textInputAction: TextInputAction.next,
+                                style: GoogleFonts.inter(
+                                  color: isDarkMode
+                                      ? AppColors.textPrimaryDark
+                                      : AppColors.textPrimary,
+                                ),
+                                onChanged: (value) =>
+                                    _updatePasswordStrength(value ?? ''),
+                                decoration: InputDecoration(
+                                  hintText: 'Password',
+                                  hintStyle: GoogleFonts.inter(
+                                    color: isDarkMode
+                                        ? AppColors.textSecondaryDark
+                                        : AppColors.textSecondary,
+                                  ),
+                                  prefixIcon: const Icon(Icons.lock_outline),
+                                  suffixIcon: IconButton(
+                                    icon: Icon(
+                                      _obscurePassword
+                                          ? Icons.visibility_off_outlined
+                                          : Icons.visibility_outlined,
+                                    ),
+                                    onPressed: _togglePasswordVisibility,
+                                  ),
+                                ),
+                                validator: FormBuilderValidators.compose([
+                                  FormBuilderValidators.required(),
+                                  FormBuilderValidators.minLength(
+                                    8,
+                                    errorText:
+                                        'Password must be at least 8 characters',
+                                  ),
+                                ]),
+                              ),
+
+                              // Password Strength Meter
+                              if (_password.isNotEmpty) ...[
+                                const SizedBox(height: 12),
+                                _buildPasswordStrengthMeter(isDarkMode),
+                              ],
+                              const SizedBox(height: 16),
+
+                              // Confirm Password Field
+                              FormBuilderTextField(
+                                name: 'confirm_password',
+                                enabled: !isLoading,
+                                obscureText: _obscureConfirmPassword,
+                                textInputAction: TextInputAction.done,
+                                onSubmitted: (_) =>
+                                    isLoading ? null : _handleRegister(),
+                                style: GoogleFonts.inter(
+                                  color: isDarkMode
+                                      ? AppColors.textPrimaryDark
+                                      : AppColors.textPrimary,
+                                ),
+                                decoration: InputDecoration(
+                                  hintText: 'Confirm Password',
+                                  hintStyle: GoogleFonts.inter(
+                                    color: isDarkMode
+                                        ? AppColors.textSecondaryDark
+                                        : AppColors.textSecondary,
+                                  ),
+                                  prefixIcon: const Icon(Icons.lock_outline),
+                                  suffixIcon: IconButton(
+                                    icon: Icon(
+                                      _obscureConfirmPassword
+                                          ? Icons.visibility_off_outlined
+                                          : Icons.visibility_outlined,
+                                    ),
+                                    onPressed:
+                                        _toggleConfirmPasswordVisibility,
+                                  ),
+                                ),
+                                validator: FormBuilderValidators.compose([
+                                  FormBuilderValidators.required(),
+                                  (value) {
+                                    if (value != _password) {
+                                      return 'Passwords do not match';
+                                    }
+                                    return null;
+                                  },
+                                ]),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Terms and Conditions Checkbox
+                        _buildTermsCheckbox(isDarkMode, isLoading),
+
+                        const SizedBox(height: 24),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: isLoading ? null : _handleRegister,
+                            child: isLoading
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor:
+                                          AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
+                                    ),
+                                  )
+                                : Text(
+                                    'Register',
+                                    style: GoogleFonts.inter(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                      ],
                     ),
-                    const SizedBox(height: 24),
-                  ],
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -541,9 +582,8 @@ class _RegisterScreenState extends State<RegisterScreen>
           borderRadius: BorderRadius.circular(4),
           child: LinearProgressIndicator(
             value: _passwordStrength,
-            backgroundColor: isDarkMode
-                ? AppColors.borderDark
-                : AppColors.borderLight,
+            backgroundColor:
+                isDarkMode ? AppColors.borderDark : AppColors.borderLight,
             valueColor: AlwaysStoppedAnimation<Color>(_passwordStrengthColor),
             minHeight: 6,
           ),
@@ -563,7 +603,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     );
   }
 
-  Widget _buildTermsCheckbox(bool isDarkMode) {
+  Widget _buildTermsCheckbox(bool isDarkMode, bool isLoading) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -572,7 +612,7 @@ class _RegisterScreenState extends State<RegisterScreen>
           height: 24,
           child: Checkbox(
             value: _acceptedTerms,
-            onChanged: _isLoading
+            onChanged: isLoading
                 ? null
                 : (value) {
                     setState(() => _acceptedTerms = value ?? false);
@@ -586,7 +626,7 @@ class _RegisterScreenState extends State<RegisterScreen>
         const SizedBox(width: 12),
         Expanded(
           child: GestureDetector(
-            onTap: _isLoading
+            onTap: isLoading
                 ? null
                 : () => setState(() => _acceptedTerms = !_acceptedTerms),
             child: RichText(

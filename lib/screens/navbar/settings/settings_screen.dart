@@ -3,6 +3,7 @@ import 'package:arbaz_app/screens/navbar/settings/safety_vault/safety_vault_scre
 import 'package:arbaz_app/services/vacation_mode_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
+import 'package:arbaz_app/services/auth_state.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
@@ -1047,9 +1048,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  // Perform logout
+                onPressed: () async {
+                  final authState = context.read<AuthState>();
+                  Navigator.pop(context); // Close dialog
+
+                  try {
+                    final result = await authState.signOut();
+                    if (!context.mounted) return;
+
+                    switch (result) {
+                      case AuthSuccess():
+                        // Clear entire navigation stack and go to AuthGate
+                        Navigator.of(context).popUntil((route) => route.isFirst);
+                      case AuthFailure(:final error):
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              error.isNotEmpty ? error : 'Logout failed. Please try again.',
+                              style: GoogleFonts.inter(),
+                            ),
+                            backgroundColor: AppColors.dangerRed,
+                          ),
+                        );
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Logout failed. Please try again.',
+                            style: GoogleFonts.inter(),
+                          ),
+                          backgroundColor: AppColors.dangerRed,
+                        ),
+                      );
+                    }
+                  }
                 },
                 child: Text(
                   'Logout',
