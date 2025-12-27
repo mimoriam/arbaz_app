@@ -547,44 +547,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
 
-          // Edit Quiz Questions Button
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: GestureDetector(
-              onTap: () {
-                // Navigate to edit quiz questions
-              },
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                decoration: BoxDecoration(
-                  color: isDarkMode
-                      ? AppColors.backgroundDark
-                      : AppColors.inputFillLight,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.edit_outlined,
-                      size: 18,
-                      color: AppColors.primaryBlue,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Edit Quiz Questions',
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.primaryBlue,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+          // // Edit Quiz Questions Button
+          // Padding(
+          //   padding: const EdgeInsets.symmetric(horizontal: 16),
+          //   child: GestureDetector(
+          //     onTap: () {
+          //       // Navigate to edit quiz questions
+          //     },
+          //     child: Container(
+          //       width: double.infinity,
+          //       padding: const EdgeInsets.symmetric(vertical: 14),
+          //       decoration: BoxDecoration(
+          //         color: isDarkMode
+          //             ? AppColors.backgroundDark
+          //             : AppColors.inputFillLight,
+          //         borderRadius: BorderRadius.circular(14),
+          //       ),
+          //       child: Row(
+          //         mainAxisAlignment: MainAxisAlignment.center,
+          //         children: [
+          //           Icon(
+          //             Icons.edit_outlined,
+          //             size: 18,
+          //             color: AppColors.primaryBlue,
+          //           ),
+          //           const SizedBox(width: 8),
+          //           Text(
+          //             'Edit Quiz Questions',
+          //             style: GoogleFonts.inter(
+          //               fontSize: 14,
+          //               fontWeight: FontWeight.w600,
+          //               color: AppColors.primaryBlue,
+          //             ),
+          //           ),
+          //         ],
+          //       ),
+          //     ),
+          //   ),
+          // ),
 
           const SizedBox(height: 12),
 
