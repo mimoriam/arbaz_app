@@ -1,7 +1,11 @@
 import 'package:arbaz_app/screens/navbar/home/home_screen.dart';
+import 'package:arbaz_app/services/firestore_service.dart';
+import 'package:arbaz_app/services/role_preference_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 
 class QuestionnaireScreen extends StatefulWidget {
   const QuestionnaireScreen({super.key});
@@ -25,6 +29,8 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
   late Animation<Offset> _card1Slide;
   late Animation<double> _card2Fade;
   late Animation<Offset> _card2Slide;
+
+  bool _isSelecting = false;
 
   @override
   void initState() {
@@ -84,6 +90,56 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
     await Future.delayed(const Duration(milliseconds: 150));
     if (!mounted) return;
     _card2Controller.forward();
+  }
+
+  Future<void> _selectRole(String role) async {
+    // Guard against repeated taps
+    if (_isSelecting) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    setState(() => _isSelecting = true);
+
+    final firestoreService = context.read<FirestoreService>();
+    final rolePreferenceService = context.read<RolePreferenceService>();
+
+    try {
+      // Save role to Firestore
+      if (role == 'senior') {
+        await firestoreService.setAsSenior(user.uid);
+      } else {
+        await firestoreService.setAsFamilyMember(user.uid);
+      }
+
+      // Save active role preference locally
+      await rolePreferenceService.setActiveRole(user.uid, role);
+
+      if (!mounted) return;
+
+      // Navigate to appropriate home screen
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => role == 'senior'
+              ? const SeniorHomeScreen()
+              : const FamilyHomeScreen(),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error saving role: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save role. Please try again.', style: GoogleFonts.inter()),
+            backgroundColor: AppColors.dangerRed,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSelecting = false);
+      }
+    }
   }
   @override
   void dispose() {
@@ -168,7 +224,8 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
                       subtitle: 'Use for myself',
                       icon: Icons.home_outlined,
                       color: AppColors.primaryBlue,
-                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SeniorHomeScreen())),
+                      onTap: () => _selectRole('senior'),
+                      isDisabled: _isSelecting,
                     ),
                   ),
                 ),
@@ -185,7 +242,8 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
                       subtitle: 'Monitoring a loved one',
                       icon: Icons.people_outline,
                       color: AppColors.successGreen,
-                      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FamilyHomeScreen())),
+                      onTap: () => _selectRole('family'),
+                      isDisabled: _isSelecting,
                     ),
                   ),
                 ),
@@ -205,58 +263,71 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
     required IconData icon,
     required Color color,
     required VoidCallback onTap,
+    bool isDisabled = false,
   }) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-    return Material(
-      color: isDarkMode ? AppColors.surfaceDark : Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: color.withValues(alpha: 0.3), width: 1.5),
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
-        child: Semantics(
-          button: true,
-          label: '$title - $subtitle',
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: GoogleFonts.inter(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+    return Opacity(
+      opacity: isDisabled ? 0.6 : 1.0,
+      child: Material(
+        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: color.withValues(alpha: 0.3), width: 1.5),
+        ),
+        child: InkWell(
+          onTap: isDisabled ? null : onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: Semantics(
+            button: true,
+            label: '$title - $subtitle',
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: GoogleFonts.inter(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        subtitle,
-                        style: GoogleFonts.inter(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+                        const SizedBox(height: 4),
+                        Text(
+                          subtitle,
+                          style: GoogleFonts.inter(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(14),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: isDisabled
+                        ? SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: color,
+                            ),
+                          )
+                        : Icon(icon, size: 28, color: color),
                   ),
-                  child: Icon(icon, size: 28, color: color),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

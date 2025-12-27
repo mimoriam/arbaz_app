@@ -1,12 +1,16 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 
 import '../screens/auth/login/login_screen.dart';
+import '../screens/navbar/home/home_screen.dart';
 import '../screens/questionnaire/questionnaire_screen.dart';
+import 'firestore_service.dart';
+import 'role_preference_service.dart';
 
 /// Pure router - single source of truth for navigation
-/// Routes based on Firebase auth state only
+/// Routes based on Firebase auth state and user roles
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
 
@@ -27,9 +31,10 @@ class AuthGate extends StatelessWidget {
             error: snapshot.error.toString(),
           );
         }
-        // User logged in → Role selection on every login
+
+        // User logged in → Check roles and route accordingly
         if (snapshot.hasData) {
-          return const QuestionnaireScreen();
+          return _RoleRouter(user: snapshot.data!);
         }
 
         // Not logged in
@@ -39,7 +44,126 @@ class AuthGate extends StatelessWidget {
   }
 }
 
-/// Simple splash screen shown during auth resolution
+/// Routes user based on their role state
+class _RoleRouter extends StatefulWidget {
+  final User user;
+
+  const _RoleRouter({required this.user});
+
+  @override
+  State<_RoleRouter> createState() => _RoleRouterState();
+}
+
+class _RoleRouterState extends State<_RoleRouter> {
+  bool _isLoading = true;
+  String? _error;
+  String? _targetRole;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRoleAndRoute();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RoleRouter oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // If the user changed (e.g., different account), re-fetch roles
+    if (oldWidget.user.uid != widget.user.uid) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+        _targetRole = null;
+      });
+      _loadRoleAndRoute();
+    }
+  }
+
+  Future<void> _loadRoleAndRoute() async {
+    try {
+      final firestoreService = context.read<FirestoreService>();
+      final rolePreferenceService = context.read<RolePreferenceService>();
+      final uid = widget.user.uid;
+
+      // 1. Check Firestore for user roles
+      final roles = await firestoreService.getUserRoles(uid);
+
+      // 2. If no roles assigned, show questionnaire
+      if (roles == null || roles.currentRole == 'unassigned') {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _targetRole = null; // null means show questionnaire
+          });
+        }
+        return;
+      }
+
+      // 3. Check local preference for active role
+      String? activeRole = await rolePreferenceService.getActiveRole(uid);
+
+      // 4. If no local preference, use Firestore role and save it
+      if (activeRole == null) {
+        // Prefer senior if user has both, otherwise use what they have
+        if (roles.isSenior) {
+          activeRole = 'senior';
+        } else if (roles.isFamilyMember) {
+          activeRole = 'family';
+        } else {
+          // Edge case: roles exist but neither flag is true
+          if (mounted) {
+            setState(() {
+              _isLoading = false;
+              _targetRole = null;
+            });
+          }
+          return;
+        }
+        await rolePreferenceService.setActiveRole(uid, activeRole);
+      }
+
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _targetRole = activeRole;
+        });
+      }
+    } catch (e) {
+      debugPrint('RoleRouter error: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const _SplashScreen();
+    }
+
+    if (_error != null) {
+      return _AuthErrorScreen(error: _error!);
+    }
+
+    // No role assigned - show questionnaire
+    if (_targetRole == null) {
+      return const QuestionnaireScreen();
+    }
+
+    // Route to appropriate home screen
+    if (_targetRole == 'senior') {
+      return const SeniorHomeScreen();
+    } else {
+      return const FamilyHomeScreen();
+    }
+  }
+}
+
+/// Simple splash screen shown during auth/role resolution
 class _SplashScreen extends StatelessWidget {
   const _SplashScreen();
 

@@ -1,6 +1,8 @@
 import 'package:arbaz_app/screens/navbar/family_dashboard/family_dashboard_screen.dart';
 import 'package:arbaz_app/screens/navbar/settings/safety_vault/safety_vault_screen.dart';
+import 'package:arbaz_app/services/role_preference_service.dart';
 import 'package:arbaz_app/services/vacation_mode_provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:arbaz_app/services/auth_state.dart';
@@ -1050,9 +1052,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               TextButton(
                 onPressed: () async {
                   final authState = context.read<AuthState>();
+                  final rolePreferenceService = context.read<RolePreferenceService>();
+                  final currentUid = FirebaseAuth.instance.currentUser?.uid;
                   Navigator.pop(context); // Close dialog
 
                   try {
+                    // Clear role preference before signing out
+                    if (currentUid != null) {
+                      await rolePreferenceService.clearActiveRole(currentUid);
+                    }
+
                     final result = await authState.signOut();
                     if (!context.mounted) return;
 

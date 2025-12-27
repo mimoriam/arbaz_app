@@ -9,6 +9,7 @@ import 'services/auth_service.dart';
 import 'services/auth_state.dart';
 import 'services/firestore_service.dart';
 import 'services/qr_invite_service.dart';
+import 'services/role_preference_service.dart';
 import 'services/theme_provider.dart';
 import 'services/vacation_mode_provider.dart';
 import 'utils/app_theme.dart';
@@ -109,6 +110,7 @@ class _AppInitializerState extends State<AppInitializer> {
         // Data services
         Provider(create: (_) => FirestoreService()),
         Provider(create: (_) => QrInviteService()),
+        Provider(create: (_) => RolePreferenceService()),
       ],
       child: const MainApp(),
     );

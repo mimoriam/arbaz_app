@@ -2,7 +2,10 @@ import 'package:arbaz_app/screens/navbar/calendar/calendar_screen.dart';
 import 'package:arbaz_app/screens/navbar/cognitive_games/cognitive_games_screen.dart';
 import 'package:arbaz_app/screens/navbar/home/senior_checkin_flow.dart';
 import 'package:arbaz_app/screens/navbar/settings/settings_screen.dart';
+import 'package:arbaz_app/services/firestore_service.dart';
+import 'package:arbaz_app/services/role_preference_service.dart';
 import 'package:arbaz_app/services/vacation_mode_provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
@@ -28,6 +31,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   SafetyStatus _currentStatus = SafetyStatus.safe;
   bool _isSendingHelp = false;
   bool _hasCheckedInToday = false;
+  bool _isSwitchingRole = false;
   int _currentStreak =
       46; // Mock streak - in real app, this comes from a service
   late AnimationController _pulseController;
@@ -53,6 +57,74 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   void dispose() {
     _pulseController.dispose();
     super.dispose();
+  }
+
+  /// Unified role switching helper with loading state and error handling
+  Future<void> _switchRole({
+    required String targetRole,
+    required Future<void> Function(String uid) setRoleInFirestore,
+    required Widget targetScreen,
+  }) async {
+    // Prevent concurrent switches
+    if (_isSwitchingRole) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      debugPrint('Cannot switch role: No authenticated user');
+      return;
+    }
+
+    setState(() => _isSwitchingRole = true);
+
+    final rolePreferenceService = context.read<RolePreferenceService>();
+
+    try {
+      // Step 1: Grant role in Firestore first
+      await setRoleInFirestore(user.uid);
+
+      // Step 2: Update local preference
+      await rolePreferenceService.setActiveRole(user.uid, targetRole);
+
+      if (!mounted) return;
+
+      // Step 3: Navigate only after both operations succeed
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => targetScreen),
+      );
+    } catch (e, stackTrace) {
+      debugPrint('Error switching to $targetRole: $e');
+      debugPrint('Stack trace: $stackTrace');
+      
+      if (mounted) {
+        setState(() => _isSwitchingRole = false);
+        
+        // Show contextual error message
+        String errorMessage = 'Failed to switch roles.';
+        if (e.toString().contains('permission')) {
+          errorMessage = 'Permission denied. Please try again later.';
+        } else if (e.toString().contains('network') || e.toString().contains('connection')) {
+          errorMessage = 'Network error. Please check your connection.';
+        } else if (e.toString().contains('unavailable')) {
+          errorMessage = 'Service unavailable. Please try again later.';
+        }
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage, style: GoogleFonts.inter()),
+            backgroundColor: AppColors.dangerRed,
+          ),
+        );
+      }
+    }
+  }
+
+  void _switchToFamily() {
+    final firestoreService = context.read<FirestoreService>();
+    _switchRole(
+      targetRole: 'family',
+      setRoleInFirestore: (uid) => firestoreService.setAsFamilyMember(uid),
+      targetScreen: const FamilyHomeScreen(),
+    );
   }
 
   String _getGreeting() {
@@ -346,6 +418,13 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                         builder: (context) => const SettingsScreen()),
                   );
                 },
+              ),
+              const SizedBox(width: 12),
+              _buildHeaderAction(
+                Icons.swap_horiz_rounded,
+                'Family View',
+                isDarkMode,
+                onTap: _switchToFamily,
               ),
             ],
           ),
@@ -834,6 +913,7 @@ class FamilyHomeScreen extends StatefulWidget {
 class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  bool _isSwitchingRole = false;
 
   // Mock data - in a real app, this comes from a service
   final String _seniorName = 'Annie';
@@ -852,6 +932,74 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   void dispose() {
     _tabController.dispose();
     super.dispose();
+  }
+
+  /// Unified role switching helper with loading state and error handling
+  Future<void> _switchRole({
+    required String targetRole,
+    required Future<void> Function(String uid) setRoleInFirestore,
+    required Widget targetScreen,
+  }) async {
+    // Prevent concurrent switches
+    if (_isSwitchingRole) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      debugPrint('Cannot switch role: No authenticated user');
+      return;
+    }
+
+    setState(() => _isSwitchingRole = true);
+
+    final rolePreferenceService = context.read<RolePreferenceService>();
+
+    try {
+      // Step 1: Grant role in Firestore first
+      await setRoleInFirestore(user.uid);
+
+      // Step 2: Update local preference
+      await rolePreferenceService.setActiveRole(user.uid, targetRole);
+
+      if (!mounted) return;
+
+      // Step 3: Navigate only after both operations succeed
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => targetScreen),
+      );
+    } catch (e, stackTrace) {
+      debugPrint('Error switching to $targetRole: $e');
+      debugPrint('Stack trace: $stackTrace');
+      
+      if (mounted) {
+        setState(() => _isSwitchingRole = false);
+        
+        // Show contextual error message
+        String errorMessage = 'Failed to switch roles.';
+        if (e.toString().contains('permission')) {
+          errorMessage = 'Permission denied. Please try again later.';
+        } else if (e.toString().contains('network') || e.toString().contains('connection')) {
+          errorMessage = 'Network error. Please check your connection.';
+        } else if (e.toString().contains('unavailable')) {
+          errorMessage = 'Service unavailable. Please try again later.';
+        }
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage, style: GoogleFonts.inter()),
+            backgroundColor: AppColors.dangerRed,
+          ),
+        );
+      }
+    }
+  }
+
+  void _switchToSenior() {
+    final firestoreService = context.read<FirestoreService>();
+    _switchRole(
+      targetRole: 'senior',
+      setRoleInFirestore: (uid) => firestoreService.setAsSenior(uid),
+      targetScreen: const SeniorHomeScreen(),
+    );
   }
 
   String _getGreeting() {
@@ -1007,6 +1155,12 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                 MaterialPageRoute(builder: (context) => const SettingsScreen()),
               );
             },
+          ),
+          const SizedBox(width: 8),
+          _buildHeaderIcon(
+            Icons.swap_horiz_rounded,
+            isDarkMode,
+            onTap: _switchToSenior,
           ),
         ],
       ),
