@@ -52,7 +52,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     // Listen for app lifecycle changes to refresh location permission
     _lifecycleListener = AppLifecycleListener(
-      onResume: () => _checkLocationPermission(),
+      onResume: () async {
+        // Small delay to ensure OS permission state is fully updated
+        await Future.delayed(const Duration(milliseconds: 300));
+        _checkLocationPermission();
+      },
     );
 
     // Pre-populate identity from Auth to avoid flash of default values
@@ -90,11 +94,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final locationService = context.read<LocationService>();
     final permission = await locationService.checkPermission();
 
+    // Also check if system location services are enabled
+    final isServiceEnabled = await Geolocator.isLocationServiceEnabled();
+
     if (mounted) {
       setState(() {
         _isLocationEnabled =
-            permission == LocationPermission.whileInUse ||
-            permission == LocationPermission.always;
+            isServiceEnabled &&
+            (permission == LocationPermission.whileInUse ||
+             permission == LocationPermission.always);
       });
     }
   }
@@ -155,12 +163,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 16),
 
                     // Vacation Mode Card
                     _buildVacationModeCard(isDarkMode),
 
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 18),
 
                     // Check-in Schedule Section
                     _buildSectionHeader(
@@ -171,7 +178,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 12),
                     _buildCheckInSchedule(isDarkMode),
 
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 18),
 
                     // Step Options Section
                     _buildSectionHeader(
@@ -182,7 +189,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 12),
                     _buildStepOptions(isDarkMode),
 
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 18),
 
                     // Identity Section
                     _buildSectionHeader(
@@ -193,7 +200,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 12),
                     _buildIdentitySection(isDarkMode),
 
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 18),
 
                     // Escalation Alarm Section
                     _buildSectionHeader(
@@ -204,7 +211,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 12),
                     _buildEscalationAlarm(isDarkMode),
 
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 18),
 
                     // Family Circle Section
                     _buildSectionHeader(
@@ -215,12 +222,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 12),
                     _buildFamilyCircle(isDarkMode),
 
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 18),
 
                     // Generate Invite Code Card
                     _buildGenerateInviteCodeCard(isDarkMode),
 
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 18),
 
                     // Family Dashboard Section
                     _buildSectionHeader(
@@ -231,12 +238,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 12),
                     _buildFamilyDashboardCard(isDarkMode),
 
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 12),
 
                     // Safety Vault Card
                     _buildSafetyVaultCard(isDarkMode),
 
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 18),
 
                     // Logout Button
                     _buildLogoutButton(isDarkMode),
@@ -759,38 +766,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
 
-          // Divider
-          Divider(
-            height: 1,
-            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
-          ),
+          // // Divider
+          // Divider(
+          //   height: 1,
+          //   color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+          // ),
 
-          // Timezone
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.language,
-                  size: 20,
-                  color: isDarkMode
-                      ? AppColors.textSecondaryDark
-                      : AppColors.textSecondary,
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  _timezone,
-                  style: GoogleFonts.inter(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                    color: isDarkMode
-                        ? AppColors.textPrimaryDark
-                        : AppColors.textPrimary,
-                  ),
-                ),
-              ],
-            ),
-          ),
+          // // Timezone
+          // Padding(
+          //   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          //   child: Row(
+          //     children: [
+          //       Icon(
+          //         Icons.language,
+          //         size: 20,
+          //         color: isDarkMode
+          //             ? AppColors.textSecondaryDark
+          //             : AppColors.textSecondary,
+          //       ),
+          //       const SizedBox(width: 12),
+          //       Text(
+          //         _timezone,
+          //         style: GoogleFonts.inter(
+          //           fontSize: 16,
+          //           fontWeight: FontWeight.w500,
+          //           color: isDarkMode
+          //               ? AppColors.textPrimaryDark
+          //               : AppColors.textPrimary,
+          //         ),
+          //       ),
+          //     ],
+          //   ),
+          // ),
 
           if (_locationAddress != null) ...[
             // Divider
@@ -889,10 +896,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 GestureDetector(
                   onTap: () async {
+                    // Opens system location settings
+                    // The onResume callback will refresh permission state when user returns
                     await Geolocator.openLocationSettings();
-                    if (mounted) {
-                      _checkLocationPermission();
-                    }
                   },
                   child: Container(
                     padding: const EdgeInsets.all(8),

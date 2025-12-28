@@ -1001,7 +1001,7 @@ class _CalendarScreenState extends State<CalendarScreen>
                     Expanded(
                       child: _buildInfoChip(
                         icon: Icons.mood,
-                        label: 'Mood: ${latestRecord.mood}',
+                        label: 'Mood: ${_capitalize(latestRecord.mood!)}',
                         isDarkMode: isDarkMode,
                       ),
                     ),
@@ -1034,14 +1034,14 @@ class _CalendarScreenState extends State<CalendarScreen>
                     if (latestRecord.sleep != null)
                       _buildSimpleRow(
                         'Sleep Quality',
-                        latestRecord.sleep!,
+                        _capitalize(latestRecord.sleep!),
                         isDarkMode,
                       ),
                     if (latestRecord.energy != null) ...[
                       const SizedBox(height: 8),
                       _buildSimpleRow(
                         'Energy Level',
-                        latestRecord.energy!,
+                        _capitalize(latestRecord.energy!),
                         isDarkMode,
                       ),
                     ],
@@ -1095,6 +1095,14 @@ class _CalendarScreenState extends State<CalendarScreen>
         ),
       ],
     );
+  }
+
+  /// Capitalizes the first letter of a string and handles underscores
+  String _capitalize(String text) {
+    if (text.isEmpty) return text;
+    // Replace underscores with spaces and capitalize first letter
+    final formatted = text.replaceAll('_', ' ');
+    return formatted[0].toUpperCase() + formatted.substring(1);
   }
 
   Widget _buildStatusCard(

@@ -30,7 +30,7 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
   late Animation<double> _card2Fade;
   late Animation<Offset> _card2Slide;
 
-  bool _isSelecting = false;
+  String? _selectingRole;
 
   @override
   void initState() {
@@ -94,12 +94,12 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
 
   Future<void> _selectRole(String role) async {
     // Guard against repeated taps
-    if (_isSelecting) return;
+    if (_selectingRole != null) return;
 
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    setState(() => _isSelecting = true);
+    setState(() => _selectingRole = role);
 
     final firestoreService = context.read<FirestoreService>();
     final rolePreferenceService = context.read<RolePreferenceService>();
@@ -137,7 +137,7 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
       }
     } finally {
       if (mounted) {
-        setState(() => _isSelecting = false);
+        setState(() => _selectingRole = null);
       }
     }
   }
@@ -225,7 +225,8 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
                       icon: Icons.home_outlined,
                       color: AppColors.primaryBlue,
                       onTap: () => _selectRole('senior'),
-                      isDisabled: _isSelecting,
+                      isLoading: _selectingRole == 'senior',
+                      isDisabled: _selectingRole != null,
                     ),
                   ),
                 ),
@@ -243,7 +244,8 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
                       icon: Icons.people_outline,
                       color: AppColors.successGreen,
                       onTap: () => _selectRole('family'),
-                      isDisabled: _isSelecting,
+                      isLoading: _selectingRole == 'family',
+                      isDisabled: _selectingRole != null,
                     ),
                   ),
                 ),
@@ -263,6 +265,7 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
     required IconData icon,
     required Color color,
     required VoidCallback onTap,
+    bool isLoading = false,
     bool isDisabled = false,
   }) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
@@ -315,7 +318,7 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
                       color: color.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(14),
                     ),
-                    child: isDisabled
+                    child: isLoading
                         ? SizedBox(
                             width: 28,
                             height: 28,

@@ -40,6 +40,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   SafetyStatus _currentStatus = SafetyStatus.safe;
   bool _isSendingHelp = false;
   bool _hasCheckedInToday = false;
+  bool _isLoadingCheckInStatus = true; // Prevents flicker/interaction until status loaded
   HomeAction _activeAction = HomeAction.none;
   int _currentStreak = 0; // Dynamic streak - loaded from Firestore
   late AnimationController _pulseController;
@@ -105,26 +106,33 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
 
       // Load Senior State for Check-in status
       final seniorState = await firestoreService.getSeniorState(user.uid);
-      if (mounted && seniorState != null) {
-        final lastCheckIn = seniorState.lastCheckIn;
-        if (lastCheckIn != null) {
-          final now = DateTime.now();
-          final isToday = lastCheckIn.year == now.year && 
-                          lastCheckIn.month == now.month && 
-                          lastCheckIn.day == now.day;
-          
-          setState(() {
-            _hasCheckedInToday = isToday;
-            _currentStreak = seniorState.currentStreak;
-            if (isToday) {
-               _currentStatus = SafetyStatus.safe;
-               _pulseController.stop();
-            }
-          });
+      if (mounted) {
+        if (seniorState != null) {
+          final lastCheckIn = seniorState.lastCheckIn;
+          if (lastCheckIn != null) {
+            final now = DateTime.now();
+            final isToday = lastCheckIn.year == now.year && 
+                            lastCheckIn.month == now.month && 
+                            lastCheckIn.day == now.day;
+            
+            setState(() {
+              _hasCheckedInToday = isToday;
+              _currentStreak = seniorState.currentStreak;
+              _isLoadingCheckInStatus = false; // Status verified
+              if (isToday) {
+                 _currentStatus = SafetyStatus.safe;
+                 _pulseController.stop();
+              }
+            });
+          } else {
+            setState(() {
+              _currentStreak = seniorState.currentStreak;
+              _isLoadingCheckInStatus = false; // Status verified (no check-in yet)
+            });
+          }
         } else {
-          setState(() {
-            _currentStreak = seniorState.currentStreak;
-          });
+          // No senior state found - still mark as loaded
+          setState(() => _isLoadingCheckInStatus = false);
         }
         
         // Populate last check-in location from profile (stored during check-in)
@@ -387,7 +395,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                         // Large Status Circle Button
                         _buildStatusButton(
                           isVacationMode: isVacationMode,
-                          isLoading: vacationProvider.isLoading,
+                          isLoading: vacationProvider.isLoading || _isLoadingCheckInStatus,
                         ),
 
                         SizedBox(height: screenHeight * 0.05),
@@ -729,7 +737,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       statusIcon = Icons.check;
       statusText = "I'M SAFE";
       subtitleText = "You've checked in for today";
-      isClickable = false; // Not clickable after completion    } else if (_currentStatus == SafetyStatus.ok) {
+      isClickable = false; // Not clickable after completion
+    } else if (_currentStatus == SafetyStatus.ok) {
       // Yellow state - running late
       primaryColor = const Color(0xFFFFBF00); // Golden yellow
       secondaryColor = const Color(0xFFE5A800); // Darker yellow
