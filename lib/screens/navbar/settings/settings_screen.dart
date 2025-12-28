@@ -1,3 +1,4 @@
+import 'package:arbaz_app/screens/navbar/home/home_screen.dart';
 import 'package:arbaz_app/screens/navbar/family_dashboard/family_dashboard_screen.dart';
 import 'package:arbaz_app/screens/navbar/settings/safety_vault/safety_vault_screen.dart';
 import 'package:arbaz_app/services/role_preference_service.dart';
@@ -1161,16 +1162,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _showGenerateInviteCodeDialog(bool isDarkMode) {
+  void _showGenerateInviteCodeDialog(bool isDarkMode) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    // FIX: Ensure we have a robust name for the QR payload immediately
-    // Priority: Current state name > Auth Display Name > Email prefix > "User"
+    // Ensure profile is loaded before generating QR
+    if (_userName.isEmpty) {
+      await _loadUserProfile();
+    }
+
+    // Get best available name for QR payload
+    // Priority: Loaded name > Auth Display Name > Email prefix > "User"
     String bestName = _userName;
     if (bestName.isEmpty || bestName == 'U') {
       bestName = user.displayName ?? user.email?.split('@').first ?? 'User';
     }
+    
+    debugPrint('🔍 QR generation: using name "$bestName"');
 
     final qrService = context.read<QrInviteService>();
     final inviteCode = qrService.generateInviteQrData(
@@ -1464,6 +1472,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             final firestoreService = context.read<FirestoreService>();
             Navigator.pop(context);
+            
+            // Debug: Log what role the QR code contains
+            debugPrint('📱 QR Payload: uid=${result.uid}, role=${result.role}, name=${result.name}');
 
             try {
               // Attempt profile fetches
@@ -1554,16 +1565,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   await firestoreService.setRole(
                     user.uid,
                     isFamilyMember: true,
-                    // Don't touch isSenior - keep current value
                   );
+                  // Also set active role to family to show the dashboard immediately
+                  await firestoreService.updateCurrentRole(user.uid, 'family');
                 } else {
                   // Current user is senior, invited user is family
                   // Only set isSenior=true, keep isFamilyMember if it exists
                   await firestoreService.setRole(
                     user.uid,
                     isSenior: true,
-                    // Don't touch isFamilyMember - keep current value
                   );
+                  // Also set active role to senior to show the dashboard immediately
+                  await firestoreService.updateCurrentRole(user.uid, 'senior');
                 }
               } catch (roleError) {
                 // Role update failed - try to rollback the connection
@@ -1590,6 +1603,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     backgroundColor: AppColors.successGreen,
                   ),
                 );
+                
+                // Navigate to appropriate home screen to refresh with new connection
+                // Pop back to root and push the correct home screen
+                if (result.role == 'senior') {
+                  // User just connected to a Senior - go to FamilyHomeScreen
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (_) => const FamilyHomeScreen()),
+                    (route) => false,
+                  );
+                } else {
+                  // User just connected to a Family member - go to SeniorHomeScreen
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (_) => const SeniorHomeScreen()),
+                    (route) => false,
+                  );
+                }
               }
             } catch (e) {
               debugPrint('Error adding family member via invite: $e');

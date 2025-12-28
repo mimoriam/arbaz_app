@@ -101,14 +101,27 @@ class _RoleRouterState extends State<_RoleRouter> {
 
       // 3. Check local preference for active role
       String? activeRole = await rolePreferenceService.getActiveRole(uid);
+      
+      debugPrint('🔐 AuthGate: uid=$uid');
+      debugPrint('🔐 AuthGate: localPref=$activeRole');
+      debugPrint('🔐 AuthGate: firestoreActiveRole=${roles.activeRole}');
+      debugPrint('🔐 AuthGate: isSenior=${roles.isSenior}, isFamilyMember=${roles.isFamilyMember}');
 
       // 4. If no local preference, use Firestore role and save it
       if (activeRole == null) {
-        // Prefer senior if user has both, otherwise use what they have
-        if (roles.isSenior) {
-          activeRole = 'senior';
-        } else if (roles.isFamilyMember) {
+        // First try Firestore's persisted activeRole
+        if (roles.activeRole != null && 
+            (roles.activeRole == 'senior' || roles.activeRole == 'family')) {
+          activeRole = roles.activeRole;
+        }
+        // Fall back to role flags - prefer family if only family, senior if only senior
+        else if (roles.isFamilyMember && !roles.isSenior) {
           activeRole = 'family';
+        } else if (roles.isSenior && !roles.isFamilyMember) {
+          activeRole = 'senior';
+        } else if (roles.isSenior && roles.isFamilyMember) {
+          // User has both roles - default to senior (legacy behavior or if no preference sent)
+          activeRole = 'senior';
         } else {
           // Edge case: roles exist but neither flag is true
           if (mounted) {
@@ -119,8 +132,14 @@ class _RoleRouterState extends State<_RoleRouter> {
           }
           return;
         }
-        await rolePreferenceService.setActiveRole(uid, activeRole);
+        
+        // Save to local preference for future runs
+        if (activeRole != null) {
+          await rolePreferenceService.setActiveRole(uid, activeRole);
+        }
       }
+      
+      debugPrint('🔐 AuthGate: FINAL activeRole=$activeRole');
 
       if (mounted) {
         setState(() {

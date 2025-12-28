@@ -125,8 +125,13 @@ class UserProfile {
 class UserRoles {
   final bool isSenior;
   final bool isFamilyMember;
+  final String? activeRole; // The persisted active role: 'senior' or 'family'
 
-  UserRoles({this.isSenior = false, this.isFamilyMember = false});
+  UserRoles({
+    this.isSenior = false, 
+    this.isFamilyMember = false,
+    this.activeRole,
+  });
 
   /// Derived from flags - not stored, prevents invalid states
   String get currentRole {
@@ -145,17 +150,27 @@ class UserRoles {
     return UserRoles(
       isSenior: data['isSenior'] == true,
       isFamilyMember: data['isFamilyMember'] == true,
+      activeRole: data['currentRole'] as String?,
     );
   }
 
   Map<String, dynamic> toFirestore() {
-    return {'isSenior': isSenior, 'isFamilyMember': isFamilyMember};
+    return {
+      'isSenior': isSenior, 
+      'isFamilyMember': isFamilyMember,
+      'currentRole': activeRole,
+    };
   }
 
-  UserRoles copyWith({bool? isSenior, bool? isFamilyMember}) {
+  UserRoles copyWith({
+    bool? isSenior, 
+    bool? isFamilyMember,
+    String? activeRole,
+  }) {
     return UserRoles(
       isSenior: isSenior ?? this.isSenior,
       isFamilyMember: isFamilyMember ?? this.isFamilyMember,
+      activeRole: activeRole ?? this.activeRole,
     );
   }
 }

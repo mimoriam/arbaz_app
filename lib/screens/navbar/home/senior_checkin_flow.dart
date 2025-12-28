@@ -100,6 +100,8 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
 
         try {
           await _persistCheckIn();
+          // Notify home screen immediately after successful persist
+          widget.onComplete();
           if (mounted) {
             setState(() {
               _isPersisting = false;
@@ -156,6 +158,8 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
 
     try {
       await _persistCheckIn();
+      // Notify home screen immediately after successful persist
+      widget.onComplete();
       if (mounted) {
         setState(() {
           _isPersisting = false;
@@ -257,8 +261,8 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
   }
 
   /// Called when tapping BACK HOME - just navigates back
+  /// onComplete callback was already called when check-in was persisted
   void _onComplete() {
-    widget.onComplete();
     Navigator.pop(context);
   }
 

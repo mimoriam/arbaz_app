@@ -22,6 +22,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import 'package:arbaz_app/models/wellness_data.dart';
+import 'package:arbaz_app/models/checkin_model.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'package:arbaz_app/models/user_model.dart';
@@ -364,7 +365,10 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       // Step 1: Grant role in Firestore first
       await setRoleInFirestore(user.uid);
 
-      // Step 2: Update local preference
+      // Step 2: Persist current role to Firestore for cross-session persistence
+      await context.read<FirestoreService>().updateCurrentRole(user.uid, targetRole);
+
+      // Step 3: Update local preference
       await rolePreferenceService.setActiveRole(user.uid, targetRole);
 
       if (!mounted) return;
@@ -1240,9 +1244,14 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                   final qrService = context.read<QrInviteService>();
                   Navigator.pop(context); // Close sheet
                   // Generate code for family role
+                  // Get best available name for QR payload
+                  String bestName = user.displayName ?? 
+                      user.email?.split('@').first ?? 
+                      'User';
                   final code = qrService.generateInviteQrData(
                     user.uid,
-                    'family',
+                    'senior', // Senior generating invite - scanner becomes family
+                    name: bestName,
                   );
                   await SharePlus.instance.share(ShareParams(text: code));
                 } else {
@@ -1288,7 +1297,19 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
         // although QR generation is synchronous.
         future: Future.delayed(
           const Duration(milliseconds: 500),
-          () => qrService.generateInviteQrData(user.uid, 'family'),
+          () {
+            // Get best available name for QR payload
+            String bestName = user.displayName ?? 
+                user.email?.split('@').first ?? 
+                'User';
+            // Role 'senior' indicates the INVITER is a senior
+            // Scanner will become 'family' member
+            return qrService.generateInviteQrData(
+              user.uid, 
+              'senior',
+              name: bestName,
+            );
+          },
         ),
         builder: (context, snapshot) {
           return AlertDialog(
@@ -1666,27 +1687,53 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
 
     try {
       final firestoreService = context.read<FirestoreService>();
-      final connectionsStream = firestoreService.getConnectionsForFamily(
+      
+      // FIX: Check both directions for bidirectional access
+      // 1. User is family member looking at seniors (familyId = user.uid)
+      // 2. User is senior looking at family members (seniorId = user.uid)
+      final familyConnectionsStream = firestoreService.getConnectionsForFamily(
         user.uid,
       );
-      // We act on the first emission to set up listeners
-      // Add timeout to prevent indefinite hanging
-      final connections = await connectionsStream
-          .timeout(
-            const Duration(seconds: 10),
-            onTimeout: (sink) {
-              debugPrint('Connection stream timed out, emitting empty list');
-              sink.add([]);
-              sink.close();
-            },
-          )
-          .first;
+      final seniorConnectionsStream = firestoreService.getConnectionsForSenior(
+        user.uid,
+      );
+      
+      // Fetch both streams with timeout
+      final results = await Future.wait([
+        familyConnectionsStream
+            .timeout(
+              const Duration(seconds: 10),
+              onTimeout: (sink) {
+                sink.add([]);
+                sink.close();
+              },
+            )
+            .first,
+        seniorConnectionsStream
+            .timeout(
+              const Duration(seconds: 10),
+              onTimeout: (sink) {
+                sink.add([]);
+                sink.close();
+              },
+            )
+            .first,
+      ]);
+      
+      final familyConnections = results[0]; // User is family member
+      final seniorConnections = results[1]; // User is senior
+
+      debugPrint('🔍 Raw Family Connections: ${familyConnections.length}');
+      for (var c in familyConnections) {
+        debugPrint('  - ID: ${c.id}, Senior: ${c.seniorId}, Status: ${c.status}');
+      }
+      debugPrint('🔍 Raw Senior Connections: ${seniorConnections.length}');
 
       List<SeniorInfo> allSeniors = [];
 
-      if (connections.isNotEmpty) {
-        // Collect all senior IDs from connections
-        for (final conn in connections) {
+      // From family connections: get seniors (user is family member)
+      if (familyConnections.isNotEmpty) {
+        for (final conn in familyConnections) {
           final profile = await firestoreService.getUserProfile(conn.seniorId)
               .catchError((_) => null);
           final name = profile?.displayName ?? 
@@ -1694,8 +1741,26 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               'Senior';
           allSeniors.add(SeniorInfo(id: conn.seniorId, name: name));
         }
-        debugPrint('Found ${allSeniors.length} seniors via connections');
-      } else {
+        debugPrint('Found ${familyConnections.length} seniors via getConnectionsForFamily');
+      }
+      
+      // From senior connections: get family members (user is senior)
+      // This allows bidirectional viewing
+      if (seniorConnections.isNotEmpty) {
+        for (final conn in seniorConnections) {
+          // Here familyId is the other person (family member)
+          final profile = await firestoreService.getUserProfile(conn.familyId)
+              .catchError((_) => null);
+          final name = profile?.displayName ?? 
+              profile?.email.split('@').first ?? 
+              'Family Member';
+          // Add as "senior" info for display purposes (we're viewing their data)
+          allSeniors.add(SeniorInfo(id: conn.familyId, name: name));
+        }
+        debugPrint('Found ${seniorConnections.length} family members via getConnectionsForSenior');
+      }
+      
+      if (allSeniors.isEmpty) {
         // Fallback: check familyContacts for any with relationship='Senior'
         debugPrint('No connections found, checking familyContacts...');
 
@@ -1704,11 +1769,11 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
         final contactsService = context.read<FamilyContactsService>();
         final contacts = await contactsService.getContacts(user.uid).first;
 
-        // Look for contacts with relationship='Senior' and a valid contactUid
+        // Look for contacts with relationship='Senior' (case-insensitive) and a valid contactUid
         final seniorContacts = contacts
             .where(
               (c) =>
-                  c.relationship == 'Senior' &&
+                  c.relationship.toLowerCase() == 'senior' &&
                   c.contactUid != null &&
                   c.contactUid!.isNotEmpty,
             )
@@ -1722,10 +1787,28 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           allSeniors.add(SeniorInfo(id: contact.contactUid!, name: name));
         }
         
+        // Also check for family contacts (for seniors viewing family view)
+        final familyContacts = contacts
+            .where(
+              (c) =>
+                  c.relationship.toLowerCase() == 'family' &&
+                  c.contactUid != null &&
+                  c.contactUid!.isNotEmpty,
+            )
+            .toList();
+
+        for (final contact in familyContacts) {
+          final profile = await firestoreService.getUserProfile(contact.contactUid!)
+              .catchError((_) => null);
+          final name = profile?.displayName ?? 
+              (contact.name.isNotEmpty ? contact.name : 'Family Member');
+          allSeniors.add(SeniorInfo(id: contact.contactUid!, name: name));
+        }
+        
         if (allSeniors.isNotEmpty) {
-          debugPrint('Found ${allSeniors.length} seniors via familyContacts');
+          debugPrint('Found ${allSeniors.length} members via familyContacts');
         } else {
-          debugPrint('No seniors found in familyContacts either');
+          debugPrint('No members found in familyContacts either');
         }
       }
 
@@ -1754,8 +1837,11 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   }
 
   /// Load data for a specific senior by ID
+  /// Uses check-in history instead of seniorState for status (removes asymmetric dependency)
   Future<void> _loadSeniorDetails(String seniorId) async {
     if (!mounted) return;
+    
+    debugPrint('🔍 Loading senior details for: $seniorId');
     
     final firestoreService = context.read<FirestoreService>();
     
@@ -1765,45 +1851,70 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       orElse: () => SeniorInfo(id: seniorId, name: 'Senior'),
     );
     final srName = seniorInfo.name;
+    
+    debugPrint('🔍 Senior name resolved: $srName');
 
     if (!mounted) return;
 
-    // Load Weekly Data
-    final history = await firestoreService.getSeniorCheckInsForWeek(seniorId);
+    // Load Weekly Data (check-in history)
+    List<CheckInRecord> history = [];
+    try {
+      history = await firestoreService.getSeniorCheckInsForWeek(seniorId);
+      debugPrint('🔍 Found ${history.length} check-ins');
+    } catch (e) {
+      debugPrint('⚠️ Error loading check-in history: $e');
+    }
+    
     final weeklyData = history
         .map((h) => WellnessDataPoint.fromCheckIn(h))
         .toList();
 
+    if (!mounted) return;
+
+    // Calculate status from check-in history (no seniorState needed)
+    SeniorCheckInStatus status;
+    DateTime? lastCheckIn;
+    String? timeString;
+    
+    if (history.isNotEmpty) {
+      // Sort by timestamp descending to get most recent
+      history.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      final mostRecent = history.first;
+      lastCheckIn = mostRecent.timestamp;
+      timeString = DateFormat('HH:mm').format(lastCheckIn);
+      
+      // Check if checked in today
+      final now = DateTime.now();
+      if (lastCheckIn.year == now.year &&
+          lastCheckIn.month == now.month &&
+          lastCheckIn.day == now.day) {
+        status = SeniorCheckInStatus.safe;
+      } else {
+        // Has history but not today - pending
+        status = SeniorCheckInStatus.pending;
+      }
+    } else {
+      // No check-in history at all - still show as pending (not "no connection")
+      status = SeniorCheckInStatus.pending;
+    }
+
+    // Cancel any existing subscription (we don't use streaming anymore for initial load)
+    _seniorStateSubscription?.cancel();
+
     if (mounted) {
       setState(() {
         _weeklyWellnessData = weeklyData;
+        _seniorData = SeniorStatusData(
+          status: status,
+          seniorName: srName,
+          lastCheckIn: lastCheckIn,
+          timeString: timeString,
+        );
+        _isLoadingSeniorData = false;
       });
     }
-
-    if (!mounted) return;
-
-    // Stream State
-    _seniorStateSubscription?.cancel();
-    _seniorStateSubscription = firestoreService
-        .streamSeniorState(seniorId)
-        .listen((state) {
-          if (!mounted) return;
-          final status = _calculateSeniorStatus(
-            state,
-            state?.checkInSchedules ?? [],
-          );
-          setState(() {
-            _seniorData = SeniorStatusData(
-              status: status,
-              seniorName: srName,
-              lastCheckIn: state?.lastCheckIn,
-              timeString: state?.lastCheckIn != null
-                  ? DateFormat('HH:mm').format(state!.lastCheckIn!)
-                  : null,
-            );
-            _isLoadingSeniorData = false;
-          });
-        });
+    
+    debugPrint('✅ Senior data loaded: $srName, status: $status');
   }
 
   /// Called when user switches to a different senior in the dropdown
@@ -1896,7 +2007,10 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       // Step 1: Grant role in Firestore first
       await setRoleInFirestore(user.uid);
 
-      // Step 2: Update local preference
+      // Step 2: Update persisted current role for cross-device/logout persistence
+      await context.read<FirestoreService>().updateCurrentRole(user.uid, targetRole);
+
+      // Step 3: Update local preference
       await rolePreferenceService.setActiveRole(user.uid, targetRole);
 
       if (!mounted) return;
@@ -2273,9 +2387,14 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                   // If this is Family View, they are probably inviting a Senior to connect?
                   // But QR Service logic depends on role.
                   // Let's assume inviting a Senior.
+                  // Get best available name for QR payload
+                  String bestName = user.displayName ?? 
+                      user.email?.split('@').first ?? 
+                      'User';
                   final code = qrService.generateInviteQrData(
                     user.uid,
-                    'family', // Family member generating invite for a Senior to scan
+                    'family', // Family member generating invite - scanner becomes senior
+                    name: bestName,
                   );
                   await SharePlus.instance.share(ShareParams(text: code));
                 } else {
@@ -2309,7 +2428,17 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       context: context,
       builder: (context) => FutureBuilder<String>(
         future: Future.value(
-          qrService.generateInviteQrData(user.uid, 'family'), // Family generating invite
+          () {
+            // Get best available name for QR payload
+            String bestName = user.displayName ?? 
+                user.email?.split('@').first ?? 
+                'User';
+            return qrService.generateInviteQrData(
+              user.uid, 
+              'family',
+              name: bestName,
+            );
+          }(),
         ),
         builder: (context, snapshot) {
           // Handle error state
@@ -2585,20 +2714,19 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             textAlign: TextAlign.center,
             style: GoogleFonts.inter(color: Colors.grey),
           ),
-          const SizedBox(height: 24),
-          ElevatedButton.icon(
-            onPressed: _onInviteFamily,
-            icon: const Icon(Icons.qr_code),
-            label: const Text('Generate Invite QR/Code'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primaryBlue,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
+          // ElevatedButton.icon(
+          //   onPressed: _onInviteFamily,
+          //   icon: const Icon(Icons.qr_code),
+          //   label: const Text('Generate Invite QR/Code'),
+          //   style: ElevatedButton.styleFrom(
+          //     backgroundColor: AppColors.primaryBlue,
+          //     foregroundColor: Colors.white,
+          //     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          //     shape: RoundedRectangleBorder(
+          //       borderRadius: BorderRadius.circular(12),
+          //     ),
+          //   ),
+          // ),
         ],
       ),
     );
@@ -2940,12 +3068,24 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     List<WellnessDataPoint> data,
     bool isDarkMode,
   ) {
+    // Require minimum 5 data points for meaningful chart
+    const int minDataPoints = 5;
+    
     if (data.isEmpty) {
       return _buildHealthPlaceholderCard(
         isDarkMode: isDarkMode,
         icon: Icons.show_chart,
         title: 'No Wellness Data Yet',
         subtitle: 'Wellness data will appear here once check-ins are recorded.',
+      );
+    }
+    
+    if (data.length < minDataPoints) {
+      return _buildHealthPlaceholderCard(
+        isDarkMode: isDarkMode,
+        icon: Icons.show_chart,
+        title: 'Building Wellness Index',
+        subtitle: '${minDataPoints - data.length} more check-ins needed to display the wellness chart.',
       );
     }
 
@@ -3044,15 +3184,25 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
 
   Widget _buildCognitivePerformanceCard(bool isDarkMode) {
     // TODO: Replace with actual cognitive data when available
-    // For now, show placeholder since we don't have real cognitive metrics
-    final hasData = false; // Will be replaced with actual data check
+    // Require minimum 5 data points for meaningful chart (same as wellness)
+    const int minDataPoints = 5;
+    final cognitiveDataCount = 0; // Will be replaced with actual data length
     
-    if (!hasData) {
+    if (cognitiveDataCount == 0) {
       return _buildHealthPlaceholderCard(
         isDarkMode: isDarkMode,
         icon: Icons.psychology,
         title: 'No Cognitive Data Yet',
         subtitle: 'Play brain games to track cognitive performance over time.',
+      );
+    }
+    
+    if (cognitiveDataCount < minDataPoints) {
+      return _buildHealthPlaceholderCard(
+        isDarkMode: isDarkMode,
+        icon: Icons.psychology,
+        title: 'Building Cognitive Index',
+        subtitle: '${minDataPoints - cognitiveDataCount} more games needed to display the cognitive chart.',
       );
     }
     

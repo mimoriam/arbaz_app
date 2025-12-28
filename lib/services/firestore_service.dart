@@ -117,6 +117,15 @@ class FirestoreService {
     await setRole(uid, isFamilyMember: true);
   }
 
+  /// Updates the user's current active role in Firestore.
+  /// This persists across logout/login sessions.
+  Future<void> updateCurrentRole(String uid, String role) async {
+    if (role != 'senior' && role != 'family') return;
+    await _rolesRef(uid).set({
+      'currentRole': role,
+    }, SetOptions(merge: true));
+  }
+
   // ===== Volatile State Operations =====
 
   Future<SeniorState?> getSeniorState(String uid) async {
@@ -143,7 +152,6 @@ class FirestoreService {
           StreamTransformer<SeniorState?, SeniorState?>.fromHandlers(
             handleError: (error, stackTrace, sink) {
               // Log the error (using print since debugPrint requires flutter import)
-              print('Error streaming senior state: $error');
               // Emit null to subscribers for graceful degradation
               sink.add(null);
             },
