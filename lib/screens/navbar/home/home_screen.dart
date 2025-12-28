@@ -500,7 +500,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                       MaterialPageRoute(
                           builder: (context) => const CalendarScreen()),
                     );
-                    setState(() => _activeAction = HomeAction.none);
+                    if (mounted) {
+                      setState(() => _activeAction = HomeAction.none);
+                    }
                   }
                 },
               ),
@@ -518,7 +520,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                       context,
                       MaterialPageRoute(builder: (context) => const CognitiveGamesScreen()),
                     );
-                    setState(() => _activeAction = HomeAction.none);
+                    if (mounted) {
+                      setState(() => _activeAction = HomeAction.none);
+                    }
                   }
                 },
               ),
@@ -536,7 +540,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                       context,
                       MaterialPageRoute(builder: (context) => const SettingsScreen()),
                     );
-                    setState(() => _activeAction = HomeAction.none);
+                    if (mounted) {
+                      setState(() => _activeAction = HomeAction.none);
+                    }
                   }
                 },
               ),
@@ -1536,7 +1542,9 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                   context,
                   MaterialPageRoute(builder: (context) => const CalendarScreen()),
                 );
-                setState(() => _activeAction = HomeAction.none);
+                if (mounted) {
+                  setState(() => _activeAction = HomeAction.none);
+                }
               }
             },
           ),
@@ -1553,7 +1561,9 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                   context,
                   MaterialPageRoute(builder: (context) => const SettingsScreen()),
                 );
-                setState(() => _activeAction = HomeAction.none);
+                if (mounted) {
+                  setState(() => _activeAction = HomeAction.none);
+                }
               }
             },
           ),

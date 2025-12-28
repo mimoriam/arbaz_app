@@ -85,7 +85,7 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
   Future<void> _nextStep() async {
     // Capture provider before async gap
     final gamesProvider = context.read<GamesProvider>();
-    
+
     await _animationController.reverse();
 
     if (_currentStep < _totalSteps - 1) {
@@ -97,7 +97,7 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
       } else {
         // Show loading state while persisting
         setState(() => _isPersisting = true);
-        
+
         try {
           await _persistCheckIn();
           if (mounted) {
@@ -145,7 +145,7 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
   Future<void> _onBrainExerciseDecided(bool wantsToPlay) async {
     _response.wantsBrainExercise = wantsToPlay;
     await _animationController.reverse();
-    
+
     // Show loading state while persisting
     if (mounted) {
       setState(() {
@@ -153,7 +153,7 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
         _isPersisting = true;
       });
     }
-    
+
     try {
       await _persistCheckIn();
       if (mounted) {
@@ -167,7 +167,8 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
       if (mounted) {
         setState(() {
           _isPersisting = false;
-          _showBrainExercise = true; // Revert to brain exercise screen on failure
+          _showBrainExercise =
+              true; // Revert to brain exercise screen on failure
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -177,12 +178,12 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
         );
       }
     }
-    
+
     _animationController.forward();
   }
 
   /// Persists check-in data to Firestore with retry logic.
-  /// Uses exponential backoff to handle transient network failures.
+  /// Uses linear backoff to handle transient network failures.
   /// Throws an exception only after all retries are exhausted.
   Future<void> _persistCheckIn() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -196,8 +197,9 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
 
     Position? position;
     try {
-      position = await locationService.getCurrentLocation()
-          .timeout(const Duration(seconds: 10));
+      position = await locationService.getCurrentLocation().timeout(
+        const Duration(seconds: 10),
+      );
     } on TimeoutException {
       debugPrint('Location request timed out');
     } catch (e) {
@@ -207,7 +209,8 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
     String? address;
     if (position != null) {
       try {
-        address = await locationService.getAddressFromPosition(position)
+        address = await locationService
+            .getAddressFromPosition(position)
             .timeout(const Duration(seconds: 10));
       } on TimeoutException {
         debugPrint('Address lookup timed out');
@@ -233,7 +236,7 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
     // Retry logic with exponential backoff
     const maxAttempts = 3;
     var attempt = 0;
-    
+
     while (attempt < maxAttempts) {
       try {
         await firestoreService.recordCheckIn(user.uid, record);
@@ -241,13 +244,13 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
       } catch (e) {
         attempt++;
         debugPrint('Check-in attempt $attempt failed: $e');
-        
+
         if (attempt >= maxAttempts) {
           // All retries exhausted - propagate the error
           throw Exception('Check-in failed after $maxAttempts attempts: $e');
         }
-        
-        // Exponential backoff: 2s, 4s, 6s
+
+        // Linear backoff: 2s, 4s
         await Future.delayed(Duration(seconds: attempt * 2));
       }
     }
@@ -271,10 +274,10 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
         child: _isPersisting
             ? _buildLoadingScreen(isDarkMode)
             : _showSuccess
-                ? _buildSuccessScreen(isDarkMode)
-                : _showBrainExercise
-                    ? _buildBrainExerciseScreen(isDarkMode)
-                    : _buildQuestionScreen(isDarkMode),
+            ? _buildSuccessScreen(isDarkMode)
+            : _showBrainExercise
+            ? _buildBrainExerciseScreen(isDarkMode)
+            : _buildQuestionScreen(isDarkMode),
       ),
     );
   }
@@ -1006,36 +1009,39 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
                       : AppColors.textSecondary,
                 ),
               ),
-                if (widget.currentStreak > 0) ...[
-                  const SizedBox(height: 40),
-                  // Streak Badge
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEA580C).withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.local_fire_department_rounded,
-                          color: Color(0xFFEA580C),
-                          size: 24,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          "${widget.currentStreak} day streak",
-                          style: GoogleFonts.inter(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            color: const Color(0xFFEA580C),
-                          ),
-                        ),
-                      ],
-                    ),
+              if (widget.currentStreak > 0) ...[
+                const SizedBox(height: 40),
+                // Streak Badge
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 10,
                   ),
-                ],
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEA580C).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.local_fire_department_rounded,
+                        color: Color(0xFFEA580C),
+                        size: 24,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        "${widget.currentStreak} day streak",
+                        style: GoogleFonts.inter(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFFEA580C),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 48),
 
               // Voice Note Card

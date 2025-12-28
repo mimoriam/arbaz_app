@@ -1159,7 +1159,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (user == null) return;
 
     final qrService = context.read<QrInviteService>();
-    final inviteCode = qrService.generateInviteQrData(user.uid, 'senior');
+    // Pass the current user's name into the invite data so the recipient
+    // can see the correct name immediately without Firestore lookup
+    final inviteCode = qrService.generateInviteQrData(
+      user.uid,
+      'senior',
+      name: _userName,
+    );
 
     showModalBottomSheet(
       context: context,
@@ -1465,14 +1471,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               final currentUserProfile = profileFutures[1];
 
               // Resolve invited user name with multiple fallbacks
-              // Priority: Firestore displayName > Auth (if available) > email prefix > placeholder
-              String invitedUserName = 'Family Member';
+              // Priority: QR payload name > Firestore displayName > email prefix > placeholder
+              // Using the QR payload name as primary ensures correct display even if
+              // Firestore fetch is delayed due to security rules propagation
+              String invitedUserName = result.name ?? 'Family Member';
               if (invitedUserProfile != null &&
                   invitedUserProfile.displayName != null &&
                   invitedUserProfile.displayName!.isNotEmpty) {
+                // If Firestore profile is available, use it (it may be more up-to-date)
                 invitedUserName = invitedUserProfile.displayName!;
-              } else if (invitedUserProfile != null &&
+              } else if (invitedUserName == 'Family Member' &&
+                  invitedUserProfile != null &&
                   invitedUserProfile.email.isNotEmpty) {
+                // Only fall back to email if we don't have a name from QR
                 invitedUserName = invitedUserProfile.email.split('@').first;
               }
 

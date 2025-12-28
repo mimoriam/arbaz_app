@@ -18,9 +18,7 @@ class CheckInScheduleProvider extends ChangeNotifier {
   /// If a load is already in progress for a user, callers wait for the same future
   final Map<String, Completer<void>> _loadRequests = {};
   
-  /// Track listener count for proper subscription management
-  /// Only subscribe to auth changes when there are active listeners
-  int _listenerCount = 0;
+
 
   CheckInScheduleProvider(this._scheduleService);
 
@@ -42,19 +40,15 @@ class CheckInScheduleProvider extends ChangeNotifier {
   @override
   void addListener(VoidCallback listener) {
     super.addListener(listener);
-    _listenerCount++;
-    // Start listening when first listener attaches
-    if (_listenerCount == 1) {
-      _startAuthListening();
-    }
+    // Start listening when we have listeners
+    _startAuthListening();
   }
   
   @override
   void removeListener(VoidCallback listener) {
     super.removeListener(listener);
-    _listenerCount--;
     // Stop listening when last listener detaches
-    if (_listenerCount == 0) {
+    if (!hasListeners) {
       _stopAuthListening();
     }
   }
@@ -139,8 +133,14 @@ class CheckInScheduleProvider extends ChangeNotifier {
 
   @override
   void dispose() {
-    _authSubscription?.cancel();
+    // Cancel any partial loads to prevent stuck waiters
+    for (final completer in _loadRequests.values) {
+      if (!completer.isCompleted) {
+        completer.completeError('CheckInScheduleProvider disposed');
+      }
+    }
     _loadRequests.clear();
+    _stopAuthListening();
     super.dispose();
   }
 
@@ -176,12 +176,15 @@ class CheckInScheduleProvider extends ChangeNotifier {
       }
       debugPrint('Error loading schedules: $e');
     } finally {
-      _isLoading = false;
-      notifyListeners();
-      
-      // Remove this request and complete it
-      _loadRequests.remove(uid);
-      completer.complete();
+      // If completer is already completed (e.g. by dispose), skip updates
+      if (!completer.isCompleted) {
+        _isLoading = false;
+        notifyListeners();
+        
+        // Remove this request and complete it
+        _loadRequests.remove(uid);
+        completer.complete();
+      }
     }
   }
 

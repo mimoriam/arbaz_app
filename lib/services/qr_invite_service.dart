@@ -10,7 +10,14 @@ class QrInviteService {
   /// Returns base64 encoded JSON (simple encoding for now)
   ///
   /// Throws [ArgumentError] if userId is empty or userRole is invalid
-  String generateInviteQrData(String userId, String userRole) {
+  /// Generate a time-limited QR code payload
+  /// Returns base64 encoded JSON (simple encoding for now)
+  ///
+  /// [name] is optional but recommended - it embeds the inviter's name
+  /// so recipients see the correct name without needing Firestore lookup
+  ///
+  /// Throws [ArgumentError] if userId is empty or userRole is invalid
+  String generateInviteQrData(String userId, String userRole, {String? name}) {
     final trimmedUserId = userId.trim();
     final trimmedRole = userRole.trim().toLowerCase();
 
@@ -29,6 +36,7 @@ class QrInviteService {
     final payload = {
       'uid': trimmedUserId,
       'role': trimmedRole,
+      'name': name, // Include inviter's name for immediate display
       'exp': DateTime.now().add(qrCodeValidity).millisecondsSinceEpoch,
       'nonce': _generateNonce(),
     };
@@ -72,12 +80,14 @@ class QrInviteService {
 class InvitePayload {
   final String uid;
   final String role;
+  final String? name; // Inviter's name (optional for backward compatibility)
   final int exp;
   final String nonce;
 
   InvitePayload({
     required this.uid,
     required this.role,
+    this.name,
     required this.exp,
     required this.nonce,
   });
@@ -111,6 +121,7 @@ class InvitePayload {
     return InvitePayload(
       uid: uid,
       role: role,
+      name: json['name'] as String?, // Parse name (nullable for backward compatibility)
       exp: json['exp'] as int,
       nonce: json['nonce'] as String,
     );
@@ -120,6 +131,7 @@ class InvitePayload {
     return {
       'uid': uid,
       'role': role,
+      'name': name,
       'exp': exp,
       'nonce': nonce,
     };
