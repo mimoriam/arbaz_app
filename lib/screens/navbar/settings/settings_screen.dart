@@ -4,6 +4,7 @@ import 'package:arbaz_app/services/role_preference_service.dart';
 import 'package:arbaz_app/services/vacation_mode_provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:arbaz_app/services/auth_state.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -21,9 +22,10 @@ import 'package:arbaz_app/models/connection_model.dart';
 import 'package:arbaz_app/services/auth_gate.dart';
 import 'package:arbaz_app/services/location_service.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 
 /// Model class for a family contact
-
 
 /// Settings/Preferences Screen for the SafeCheck app
 class SettingsScreen extends StatefulWidget {
@@ -34,6 +36,8 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  late final AppLifecycleListener _lifecycleListener;
+
   // Vacation Mode is now managed by VacationModeProvider
 
   // Identity
@@ -45,7 +49,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    
+
+    // Listen for app lifecycle changes to refresh location permission
+    _lifecycleListener = AppLifecycleListener(
+      onResume: () => _checkLocationPermission(),
+    );
+
     // Pre-populate identity from Auth to avoid flash of default values
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
@@ -69,65 +78,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+  @override
+  void dispose() {
+    _lifecycleListener.dispose();
+    super.dispose();
+  }
+
   /// Check location permission status without auto-requesting
   Future<void> _checkLocationPermission() async {
     if (!mounted) return;
     final locationService = context.read<LocationService>();
     final permission = await locationService.checkPermission();
-    
+
     if (mounted) {
       setState(() {
-        _isLocationEnabled = permission == LocationPermission.whileInUse || 
-                             permission == LocationPermission.always;
-      });
-    }
-  }
-
-  /// Toggle location permission - requests if denied, opens settings if denied forever
-  Future<void> _toggleLocationPermission() async {
-    if (!mounted) return;
-    
-    // If currently enabled, we want to disable (open settings)
-    if (_isLocationEnabled) {
-       await Geolocator.openAppSettings();
-       await _checkLocationPermission(); // Re-check after returning
-       return;
-    }
-
-    // If currently disabled, check why
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      // Prompt to enable location services
-      final opened = await Geolocator.openLocationSettings();
-      if (opened) {
-        // User might have enabled it, re-check service status
-        serviceEnabled = await Geolocator.isLocationServiceEnabled();
-        if (!serviceEnabled) return; // Still disabled
-      } else {
-        return; // Could not open settings
-      }
-    }
-
-    // Check permission
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        return;
-      }
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      await Geolocator.openAppSettings();
-      await _checkLocationPermission(); // Re-check after returning
-      return;
-    }
-
-    // If we got here, permission is granted (always or whileInUse)
-    if (mounted) {
-      setState(() {
-        _isLocationEnabled = permission == LocationPermission.always || 
-                             permission == LocationPermission.whileInUse;
+        _isLocationEnabled =
+            permission == LocationPermission.whileInUse ||
+            permission == LocationPermission.always;
       });
     }
   }
@@ -135,7 +102,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadUserProfile() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-    
+
     // Set timezone immediately - doesn't require Firestore
     if (mounted) {
       setState(() {
@@ -149,7 +116,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
       });
     }
-    
+
     final firestoreService = context.read<FirestoreService>();
     try {
       final profile = await firestoreService.getUserProfile(user.uid);
@@ -247,6 +214,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     const SizedBox(height: 12),
                     _buildFamilyCircle(isDarkMode),
+
+                    const SizedBox(height: 16),
+
+                    // Generate Invite Code Card
+                    _buildGenerateInviteCodeCard(isDarkMode),
 
                     const SizedBox(height: 28),
 
@@ -439,16 +411,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                     )
-                  : _buildToggle(vacationProvider.isVacationMode, (value) async {
-                      final success =
-                          await vacationProvider.setVacationMode(value);
+                  : _buildToggle(vacationProvider.isVacationMode, (
+                      value,
+                    ) async {
+                      final success = await vacationProvider.setVacationMode(
+                        value,
+                      );
                       if (!success && context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
                               'Failed to update vacation mode',
                               style: GoogleFonts.inter(
-                                  fontWeight: FontWeight.w600),
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                             backgroundColor: AppColors.dangerRed,
                           ),
@@ -511,13 +487,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Center(child: CircularProgressIndicator()),
                 )
               else if (provider.schedules.isEmpty)
-                 Padding(
+                Padding(
                   padding: const EdgeInsets.all(20),
                   child: Text(
                     "No schedules set",
                     style: GoogleFonts.inter(
-                       color: isDarkMode ? Colors.white60 : Colors.black54
-                    )
+                      color: isDarkMode ? Colors.white60 : Colors.black54,
+                    ),
                   ),
                 )
               else
@@ -532,7 +508,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ? AppColors.borderDark
                               : AppColors.borderLight,
                         ),
-                      _buildTimeEntry(isDarkMode, provider.schedules[index], index, provider),
+                      _buildTimeEntry(
+                        isDarkMode,
+                        provider.schedules[index],
+                        index,
+                        provider,
+                      ),
                     ],
                   );
                 }),
@@ -540,7 +521,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               // Divider
               Divider(
                 height: 1,
-                color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+                color: isDarkMode
+                    ? AppColors.borderDark
+                    : AppColors.borderLight,
               ),
 
               // Add Time Button
@@ -570,7 +553,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildTimeEntry(bool isDarkMode, String time, int index, CheckInScheduleProvider provider) {
+  Widget _buildTimeEntry(
+    bool isDarkMode,
+    String time,
+    int index,
+    CheckInScheduleProvider provider,
+  ) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Row(
@@ -604,7 +592,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onPressed: () => Navigator.pop(context, false),
                       child: Text(
                         'Cancel',
-                        style: GoogleFonts.inter(color: AppColors.textSecondary),
+                        style: GoogleFonts.inter(
+                          color: AppColors.textSecondary,
+                        ),
                       ),
                     ),
                     TextButton(
@@ -709,7 +699,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Consumer<GamesProvider>(
               builder: (context, gamesProvider, _) {
                 if (gamesProvider.isLoading) {
-                  return const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2));
+                  return const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  );
                 }
                 return _buildToggle(
                   gamesProvider.isEnabled,
@@ -836,7 +830,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ],
-          
+
           // Divider
           Divider(
             height: 1,
@@ -851,16 +845,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
-                    color: (_isLocationEnabled 
-                        ? AppColors.successGreen 
-                        : AppColors.warningOrange).withValues(alpha: 0.1),
+                    color:
+                        (_isLocationEnabled
+                                ? AppColors.successGreen
+                                : AppColors.warningOrange)
+                            .withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(
                     _isLocationEnabled ? Icons.location_on : Icons.location_off,
                     size: 18,
-                    color: _isLocationEnabled 
-                        ? AppColors.successGreen 
+                    color: _isLocationEnabled
+                        ? AppColors.successGreen
                         : AppColors.warningOrange,
                   ),
                 ),
@@ -892,30 +888,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 GestureDetector(
-                  onTap: _toggleLocationPermission,
+                  onTap: () async {
+                    await Geolocator.openLocationSettings();
+                    if (mounted) {
+                      _checkLocationPermission();
+                    }
+                  },
                   child: Container(
-                    width: 48,
-                    height: 26,
+                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(13),
-                      color: _isLocationEnabled 
-                          ? AppColors.successGreen 
-                          : Colors.grey[400],
+                      color: isDarkMode
+                          ? Colors.white.withValues(alpha: 0.05)
+                          : Colors.grey[100],
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    child: AnimatedAlign(
-                      duration: const Duration(milliseconds: 200),
-                      alignment: _isLocationEnabled 
-                          ? Alignment.centerRight 
-                          : Alignment.centerLeft,
-                      child: Container(
-                        width: 22,
-                        height: 22,
-                        margin: const EdgeInsets.symmetric(horizontal: 2),
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white,
-                        ),
-                      ),
+                    child: Icon(
+                      Icons.chevron_right,
+                      size: 20,
+                      color: isDarkMode
+                          ? AppColors.textSecondaryDark
+                          : AppColors.textSecondary,
                     ),
                   ),
                 ),
@@ -1004,7 +996,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Center(
                 child: Column(
                   children: [
-                    const Icon(Icons.error_outline, color: AppColors.dangerRed, size: 32),
+                    const Icon(
+                      Icons.error_outline,
+                      color: AppColors.dangerRed,
+                      size: 32,
+                    ),
                     const SizedBox(height: 8),
                     Text(
                       'Failed to load contacts',
@@ -1033,8 +1029,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Text(
                     "No family members active",
                     style: GoogleFonts.inter(
-                      color: isDarkMode ? Colors.white60 : Colors.black54
-                    )
+                      color: isDarkMode ? Colors.white60 : Colors.black54,
+                    ),
                   ),
                 )
               else
@@ -1056,7 +1052,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               // Divider
               Divider(
                 height: 1,
-                color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+                color: isDarkMode
+                    ? AppColors.borderDark
+                    : AppColors.borderLight,
               ),
 
               // Add Contact Button
@@ -1086,6 +1084,237 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildGenerateInviteCodeCard(bool isDarkMode) {
+    return GestureDetector(
+      onTap: () => _showGenerateInviteCodeDialog(isDarkMode),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              AppColors.successGreen,
+              AppColors.successGreen.withValues(alpha: 0.8),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.successGreen.withValues(alpha: 0.3),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.qr_code_2, color: Colors.white, size: 24),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Generate Invite Code',
+                    style: GoogleFonts.inter(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Share with family members',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w400,
+                      color: Colors.white.withValues(alpha: 0.8),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.chevron_right,
+              color: Colors.white.withValues(alpha: 0.9),
+              size: 24,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showGenerateInviteCodeDialog(bool isDarkMode) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final qrService = context.read<QrInviteService>();
+    final inviteCode = qrService.generateInviteQrData(user.uid, 'senior');
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: isDarkMode ? AppColors.surfaceDark : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[400],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            Text(
+              'Your Invite Code',
+              style: GoogleFonts.inter(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: isDarkMode ? Colors.white : Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Share this code with family members so they can connect with you.',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                color: isDarkMode ? Colors.white70 : Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // QR Code
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: QrImageView(
+                data: inviteCode,
+                version: QrVersions.auto,
+                size: 200,
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Share Button
+            GestureDetector(
+              onTap: () async {
+                Navigator.pop(context);
+                await SharePlus.instance.share(
+                  ShareParams(
+                    text: inviteCode,
+                    subject: 'SafeCheck Family Invite',
+                  ),
+                );
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.primaryBlue,
+                      AppColors.primaryBlue.withValues(alpha: 0.8),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.share, color: Colors.white, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Share Invite Code',
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Copy Button
+            GestureDetector(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: inviteCode));
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Invite code copied to clipboard',
+                      style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                    ),
+                    backgroundColor: AppColors.successGreen,
+                  ),
+                );
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                decoration: BoxDecoration(
+                  color: isDarkMode
+                      ? Colors.white.withValues(alpha: 0.1)
+                      : Colors.grey[100],
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.copy,
+                      color: isDarkMode ? Colors.white70 : Colors.grey[700],
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Copy Code',
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: isDarkMode ? Colors.white70 : Colors.grey[700],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
   // void _showInviteFamilyDialog(BuildContext context) {
   //   showModalBottomSheet(
   //     context: context,
@@ -1093,8 +1322,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   //     builder: (context) => Container(
   //       padding: const EdgeInsets.all(24),
   //       decoration: BoxDecoration(
-  //         color: Theme.of(context).brightness == Brightness.dark 
-  //             ? AppColors.surfaceDark 
+  //         color: Theme.of(context).brightness == Brightness.dark
+  //             ? AppColors.surfaceDark
   //             : Colors.white,
   //         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
   //       ),
@@ -1104,10 +1333,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   //           Text(
   //             "Invite Family",
   //             style: GoogleFonts.inter(
-  //               fontSize: 20, 
+  //               fontSize: 20,
   //               fontWeight: FontWeight.bold,
-  //               color: Theme.of(context).brightness == Brightness.dark 
-  //                   ? Colors.white 
+  //               color: Theme.of(context).brightness == Brightness.dark
+  //                   ? Colors.white
   //                   : Colors.black87,
   //             ),
   //           ),
@@ -1116,23 +1345,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   //             "Share your unique code so family can monitor your safety.",
   //             textAlign: TextAlign.center,
   //             style: GoogleFonts.inter(
-  //               fontSize: 14, 
-  //               color: Theme.of(context).brightness == Brightness.dark 
-  //                   ? Colors.white70 
+  //               fontSize: 14,
+  //               color: Theme.of(context).brightness == Brightness.dark
+  //                   ? Colors.white70
   //                   : Colors.grey[600]
   //             ),
   //           ),
   //           const SizedBox(height: 24),
   //           ListTile(
   //             leading: const CircleAvatar(
-  //               backgroundColor: Color(0xFFE3F2FD), 
+  //               backgroundColor: Color(0xFFE3F2FD),
   //               child: Icon(Icons.share, color: AppColors.primaryBlue)
   //             ),
   //             title: Text(
   //               "Share Invite Code",
   //               style: GoogleFonts.inter(
-  //                 color: Theme.of(context).brightness == Brightness.dark 
-  //                     ? Colors.white 
+  //                 color: Theme.of(context).brightness == Brightness.dark
+  //                     ? Colors.white
   //                     : Colors.black87
   //               ),
   //             ),
@@ -1173,7 +1402,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onAddByPhone: (name, phone, relationship) async {
             final user = FirebaseAuth.instance.currentUser;
             if (user == null) return;
-            
+
             final contactsService = context.read<FamilyContactsService>();
             await contactsService.addContact(
               user.uid,
@@ -1190,39 +1419,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onAddByInviteCode: (code) async {
             final qrService = context.read<QrInviteService>();
             final result = qrService.validateQrData(code);
-            
+
             if (result == null) {
               // Close bottom sheet first, then show snackbar
               Navigator.pop(context);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Invalid or expired invite code')),
+                  const SnackBar(
+                    content: Text('Invalid or expired invite code'),
+                  ),
                 );
               }
               return;
             }
-            
+
             // Valid code - check if not adding yourself
             final user = FirebaseAuth.instance.currentUser;
             if (user == null) return;
-            
+
             // Prevent adding yourself as family member
             if (result.uid == user.uid) {
               Navigator.pop(context);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('You cannot add yourself as a family member')),
+                  const SnackBar(
+                    content: Text('You cannot add yourself as a family member'),
+                  ),
                 );
               }
               return;
             }
-            
+
             final firestoreService = context.read<FirestoreService>();
             final contactsService = context.read<FamilyContactsService>();
-            
+
             // Close bottom sheet first so snackbar is visible
             Navigator.pop(context);
-            
+
             try {
               // Create the connection in top-level connections collection
               final connectionId = '${result.uid}_${user.uid}';
@@ -1234,38 +1467,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 createdAt: DateTime.now(),
               );
               await firestoreService.createConnection(connection);
-              
+
               // Get both user profiles for bidirectional contact addition
-              final invitedUserProfile = await firestoreService.getUserProfile(result.uid);
-              final currentUserProfile = await firestoreService.getUserProfile(user.uid);
-              
+              final invitedUserProfile = await firestoreService.getUserProfile(
+                result.uid,
+              );
+              final currentUserProfile = await firestoreService.getUserProfile(
+                user.uid,
+              );
+
               // Resolve invited user name safely
               String invitedUserName = 'Family Member';
-              if (invitedUserProfile != null) {
-                if (invitedUserProfile.displayName != null && invitedUserProfile.displayName!.isNotEmpty) {
-                  invitedUserName = invitedUserProfile.displayName!;
-                } else {
-                  invitedUserName = invitedUserProfile.email.split('@').first;
-                }
+              if (invitedUserProfile != null &&
+                  invitedUserProfile.displayName != null &&
+                  invitedUserProfile.displayName!.isNotEmpty) {
+                invitedUserName = invitedUserProfile.displayName!;
+              } else if (invitedUserProfile != null &&
+                  invitedUserProfile.email.isNotEmpty) {
+                // Fallback to email prefix if no display name
+                invitedUserName = invitedUserProfile.email.split('@').first;
               }
-              
+
               // Resolve current user name safely
               String currentUserName = 'Family Member';
-              if (currentUserProfile != null) {
-                if (currentUserProfile.displayName != null && currentUserProfile.displayName!.isNotEmpty) {
-                  currentUserName = currentUserProfile.displayName!;
-                } else {
-                  currentUserName = currentUserProfile.email.split('@').first;
-                }
-              } else {
-                // System fallback from FirebaseAuth user
-                if (user.displayName != null && user.displayName!.isNotEmpty) {
-                  currentUserName = user.displayName!;
-                } else if (user.email != null) {
-                  currentUserName = user.email!.split('@').first;
-                }
+              if (currentUserProfile != null &&
+                  currentUserProfile.displayName != null &&
+                  currentUserProfile.displayName!.isNotEmpty) {
+                currentUserName = currentUserProfile.displayName!;
+              } else if (user.displayName != null &&
+                  user.displayName!.isNotEmpty) {
+                currentUserName = user.displayName!;
+              } else if (user.email != null) {
+                currentUserName = user.email!.split('@').first;
               }
-              
+
               // Add invited user to current user's family contacts
               await contactsService.addContact(
                 user.uid,
@@ -1277,7 +1512,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   addedAt: DateTime.now(),
                 ),
               );
-              
+
               // Also add current user to invited user's family contacts (bidirectional)
               await contactsService.addContact(
                 result.uid,
@@ -1289,11 +1524,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   addedAt: DateTime.now(),
                 ),
               );
-              
+
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('Successfully connected with $invitedUserName!'),
+                    content: Text(
+                      'Successfully connected with $invitedUserName!',
+                    ),
                     backgroundColor: AppColors.successGreen,
                   ),
                 );
@@ -1320,49 +1557,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Row(
         children: [
-           CircleAvatar(
-             radius: 16,
-             backgroundColor: AppColors.primaryBlue.withValues(alpha: 0.1),
-             child: Text(
-               contact.name.isNotEmpty ? contact.name[0].toUpperCase() : '?',
-               style: GoogleFonts.inter(
-                 fontWeight: FontWeight.bold,
-                 color: AppColors.primaryBlue
-               )
-             )
-           ),
-           const SizedBox(width: 12),
-           Column(
-             crossAxisAlignment: CrossAxisAlignment.start,
-             children: [
-               Text(
-                 contact.name,
-                 style: GoogleFonts.inter(
-                   fontSize: 16,
-                   fontWeight: FontWeight.w600,
-                   color: isDarkMode
-                       ? AppColors.textPrimaryDark
-                       : AppColors.textPrimary,
-                 ),
-               ),
-               if (contact.phone.isNotEmpty)
-                 Text(
-                   contact.phone,
-                   style: GoogleFonts.inter(
-                     fontSize: 13,
-                     color: isDarkMode ? Colors.white70 : Colors.black87,
-                   ),
-                 ),
-               if (contact.relationship.isNotEmpty)
-                 Text(
-                   contact.relationship,
-                     style: GoogleFonts.inter(
-                     fontSize: 12,
-                     color: isDarkMode ? Colors.white60 : Colors.black54
-                   )
-                 ),
-             ],
-           ),
+          CircleAvatar(
+            radius: 16,
+            backgroundColor: AppColors.primaryBlue.withValues(alpha: 0.1),
+            child: Text(
+              contact.name.isNotEmpty ? contact.name[0].toUpperCase() : '?',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.bold,
+                color: AppColors.primaryBlue,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                contact.name,
+                style: GoogleFonts.inter(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: isDarkMode
+                      ? AppColors.textPrimaryDark
+                      : AppColors.textPrimary,
+                ),
+              ),
+              if (contact.phone.isNotEmpty)
+                Text(
+                  contact.phone,
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    color: isDarkMode ? Colors.white70 : Colors.black87,
+                  ),
+                ),
+              if (contact.relationship.isNotEmpty)
+                Text(
+                  contact.relationship,
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: isDarkMode ? Colors.white60 : Colors.black54,
+                  ),
+                ),
+            ],
+          ),
           const Spacer(),
           Builder(
             builder: (context) {
@@ -1370,7 +1607,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: () async {
                   final user = FirebaseAuth.instance.currentUser;
                   if (user == null) return;
-                  
+
                   // Show confirmation dialog
                   final confirmed = await showDialog<bool>(
                     context: context,
@@ -1388,7 +1625,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           onPressed: () => Navigator.pop(dialogContext, false),
                           child: Text(
                             'Cancel',
-                            style: GoogleFonts.inter(color: AppColors.textSecondary),
+                            style: GoogleFonts.inter(
+                              color: AppColors.textSecondary,
+                            ),
                           ),
                         ),
                         TextButton(
@@ -1411,7 +1650,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   try {
                     // Use new bidirectional delete
                     final firestoreService = context.read<FirestoreService>();
-                    await firestoreService.deleteFamilyConnection(user.uid, contact.id);
+                    await firestoreService.deleteFamilyConnection(
+                      user.uid,
+                      contact.id,
+                    );
 
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -1445,7 +1687,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
-
 
   Widget _buildSafetyVaultCard(bool isDarkMode) {
     return GestureDetector(
@@ -1530,7 +1771,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       onTap: () {
         Navigator.push(
           context,
-          MaterialPageRoute(builder: (context) => const FamilyDashboardScreen()),
+          MaterialPageRoute(
+            builder: (context) => const FamilyDashboardScreen(),
+          ),
         );
       },
       child: Container(
@@ -1643,7 +1886,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               TextButton(
                 onPressed: () async {
                   final authState = context.read<AuthState>();
-                  final rolePreferenceService = context.read<RolePreferenceService>();
+                  final rolePreferenceService = context
+                      .read<RolePreferenceService>();
                   final currentUid = FirebaseAuth.instance.currentUser?.uid;
                   Navigator.pop(context); // Close dialog
 
@@ -1661,16 +1905,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         // Navigate to AuthGate and remove all routes
                         // AuthGate will show LoginScreen since user is logged out
                         Navigator.of(context).pushAndRemoveUntil(
-                          MaterialPageRoute(
-                            builder: (_) => const AuthGate(),
-                          ),
+                          MaterialPageRoute(builder: (_) => const AuthGate()),
                           (_) => false, // Remove all routes
                         );
                       case AuthFailure(:final error):
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
-                              error.isNotEmpty ? error : 'Logout failed. Please try again.',
+                              error.isNotEmpty
+                                  ? error
+                                  : 'Logout failed. Please try again.',
                               style: GoogleFonts.inter(),
                             ),
                             backgroundColor: AppColors.dangerRed,
@@ -1788,7 +2032,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 /// Bottom sheet widget for adding family members
 class _AddFamilyMemberSheet extends StatefulWidget {
   final bool isDarkMode;
-  final Future<void> Function(String name, String phone, String relationship) onAddByPhone;
+  final Future<void> Function(String name, String phone, String relationship)
+  onAddByPhone;
   final Future<void> Function(String code) onAddByInviteCode;
 
   const _AddFamilyMemberSheet({
@@ -1838,7 +2083,7 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
               ),
             ),
             const SizedBox(height: 20),
-            
+
             // Title
             Text(
               'Add Family Member',
@@ -1850,7 +2095,7 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
-            
+
             // Toggle between phone and invite code
             Row(
               children: [
@@ -1872,7 +2117,7 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
               ],
             ),
             const SizedBox(height: 20),
-            
+
             if (_showInviteCodeInput) ...[
               // Invite code input
               Text(
@@ -1891,7 +2136,7 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   filled: true,
-                  fillColor: widget.isDarkMode 
+                  fillColor: widget.isDarkMode
                       ? Colors.white.withValues(alpha: 0.1)
                       : Colors.grey[100],
                 ),
@@ -1942,7 +2187,7 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
                 keyboardType: TextInputType.phone,
               ),
               const SizedBox(height: 16),
-              
+
               // Relationship dropdown
               Text(
                 'Relationship',
@@ -1961,13 +2206,21 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   filled: true,
-                  fillColor: widget.isDarkMode 
+                  fillColor: widget.isDarkMode
                       ? Colors.white.withValues(alpha: 0.1)
                       : Colors.grey[100],
                 ),
-                items: ['Family Member', 'Son', 'Daughter', 'Spouse', 'Caregiver', 'Other']
-                    .map((r) => DropdownMenuItem(value: r, child: Text(r)))
-                    .toList(),
+                items:
+                    [
+                          'Family Member',
+                          'Son',
+                          'Daughter',
+                          'Spouse',
+                          'Caregiver',
+                          'Other',
+                        ]
+                        .map((r) => DropdownMenuItem(value: r, child: Text(r)))
+                        .toList(),
                 onChanged: (value) {
                   if (value != null) setState(() => _relationship = value);
                 },
@@ -2018,9 +2271,11 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: isSelected 
-              ? AppColors.primaryBlue 
-              : (widget.isDarkMode ? Colors.white.withValues(alpha: 0.1) : Colors.grey[200]),
+          color: isSelected
+              ? AppColors.primaryBlue
+              : (widget.isDarkMode
+                    ? Colors.white.withValues(alpha: 0.1)
+                    : Colors.grey[200]),
           borderRadius: BorderRadius.circular(10),
         ),
         child: Text(
@@ -2029,8 +2284,8 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
           style: GoogleFonts.inter(
             fontSize: 14,
             fontWeight: FontWeight.w600,
-            color: isSelected 
-                ? Colors.white 
+            color: isSelected
+                ? Colors.white
                 : (widget.isDarkMode ? Colors.white70 : Colors.black87),
           ),
         ),
@@ -2061,11 +2316,9 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
           keyboardType: keyboardType,
           decoration: InputDecoration(
             hintText: hint,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             filled: true,
-            fillColor: widget.isDarkMode 
+            fillColor: widget.isDarkMode
                 ? Colors.white.withValues(alpha: 0.1)
                 : Colors.grey[100],
           ),
@@ -2080,14 +2333,14 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
   Future<void> _handlePhoneSubmit() async {
     final name = _nameController.text.trim();
     final phone = _phoneController.text.trim();
-    
+
     if (name.isEmpty || phone.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in all fields')),
       );
       return;
     }
-    
+
     setState(() => _isLoading = true);
     try {
       await widget.onAddByPhone(name, phone, _relationship);
@@ -2095,7 +2348,9 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
       debugPrint('Error adding family member by phone: $e\n$st');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to add family member: ${e.toString()}')),
+          SnackBar(
+            content: Text('Failed to add family member: ${e.toString()}'),
+          ),
         );
       }
     } finally {
@@ -2105,14 +2360,14 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
 
   Future<void> _handleInviteCodeSubmit() async {
     final code = _inviteCodeController.text.trim();
-    
+
     if (code.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter an invite code')),
       );
       return;
     }
-    
+
     setState(() => _isLoading = true);
     try {
       await widget.onAddByInviteCode(code);

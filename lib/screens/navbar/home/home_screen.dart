@@ -26,6 +26,8 @@ enum SafetyStatus {
   sending, // Red alert - "SENDING HELP..."
 }
 
+enum HomeAction { none, calendar, settings, roleSwitch, brainGym }
+
 class SeniorHomeScreen extends StatefulWidget {
   const SeniorHomeScreen({super.key});
 
@@ -38,7 +40,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   SafetyStatus _currentStatus = SafetyStatus.safe;
   bool _isSendingHelp = false;
   bool _hasCheckedInToday = false;
-  bool _isSwitchingRole = false;
+  HomeAction _activeAction = HomeAction.none;
   int _currentStreak = 0; // Dynamic streak - loaded from Firestore
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
@@ -165,7 +167,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     required Widget targetScreen,
   }) async {
     // Prevent concurrent switches
-    if (_isSwitchingRole) return;
+    if (_activeAction != HomeAction.none) return;
 
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -173,7 +175,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       return;
     }
 
-    setState(() => _isSwitchingRole = true);
+    setState(() => _activeAction = HomeAction.roleSwitch);
 
     final rolePreferenceService = context.read<RolePreferenceService>();
 
@@ -195,7 +197,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       debugPrint('Stack trace: $stackTrace');
       
       if (mounted) {
-        setState(() => _isSwitchingRole = false);
+        setState(() => _activeAction = HomeAction.none);
         
         // Show contextual error message
         String errorMessage = 'Failed to switch roles.';
@@ -488,12 +490,18 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 Icons.calendar_today_rounded,
                 'Calendar',
                 isDarkMode,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (context) => const CalendarScreen()),
-                  );
+                isLoading: _activeAction == HomeAction.calendar,
+                onTap: () async {
+                  setState(() => _activeAction = HomeAction.calendar);
+                  await Future.delayed(const Duration(milliseconds: 300));
+                  if (mounted) {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const CalendarScreen()),
+                    );
+                    setState(() => _activeAction = HomeAction.none);
+                  }
                 },
               ),
               const SizedBox(width: 12),
@@ -501,12 +509,17 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 Icons.psychology_rounded,
                 'Brain Gym',
                 isDarkMode,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (context) => const CognitiveGamesScreen()),
-                  );
+                isLoading: _activeAction == HomeAction.brainGym,
+                onTap: () async {
+                  setState(() => _activeAction = HomeAction.brainGym);
+                  await Future.delayed(const Duration(milliseconds: 300));
+                  if (mounted) {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const CognitiveGamesScreen()),
+                    );
+                    setState(() => _activeAction = HomeAction.none);
+                  }
                 },
               ),
               const SizedBox(width: 12),
@@ -514,12 +527,17 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 Icons.settings_rounded,
                 'Settings',
                 isDarkMode,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (context) => const SettingsScreen()),
-                  );
+                isLoading: _activeAction == HomeAction.settings,
+                onTap: () async {
+                  setState(() => _activeAction = HomeAction.settings);
+                  await Future.delayed(const Duration(milliseconds: 300));
+                  if (mounted) {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                    );
+                    setState(() => _activeAction = HomeAction.none);
+                  }
                 },
               ),
               const SizedBox(width: 12),
@@ -527,6 +545,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 Icons.swap_horiz_rounded,
                 'Family View',
                 isDarkMode,
+                isLoading: _activeAction == HomeAction.roleSwitch,
                 onTap: _switchToFamily,
               ),
             ],
@@ -541,6 +560,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     String label,
     bool isDarkMode, {
     required VoidCallback onTap,
+    bool isLoading = false,
   }) {
     return Expanded(
       child: GestureDetector(
@@ -558,26 +578,37 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                   : AppColors.primaryBlue.withValues(alpha: 0.1),
             ),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon,
-                size: 20,
-                color: AppColors.primaryBlue,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: GoogleFonts.inter(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: isDarkMode
-                      ? AppColors.textSecondaryDark
-                      : AppColors.textSecondary,
-                ),
-              ),
-            ],
+          child: Center(
+            child: isLoading
+                ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: isDarkMode ? Colors.white70 : AppColors.primaryBlue,
+                    ),
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        icon,
+                        size: 20,
+                        color: AppColors.primaryBlue,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        label,
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: isDarkMode
+                              ? AppColors.textSecondaryDark
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
           ),
         ),
       ),
@@ -1271,7 +1302,7 @@ class FamilyHomeScreen extends StatefulWidget {
 class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  bool _isSwitchingRole = false;
+  HomeAction _activeAction = HomeAction.none;
 
   // Mock data - in a real app, this comes from a service
   final String _seniorName = 'Annie';
@@ -1299,7 +1330,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     required Widget targetScreen,
   }) async {
     // Prevent concurrent switches
-    if (_isSwitchingRole) return;
+    if (_activeAction != HomeAction.none) return;
 
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -1307,7 +1338,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       return;
     }
 
-    setState(() => _isSwitchingRole = true);
+    setState(() => _activeAction = HomeAction.roleSwitch);
 
     final rolePreferenceService = context.read<RolePreferenceService>();
 
@@ -1329,7 +1360,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       debugPrint('Stack trace: $stackTrace');
       
       if (mounted) {
-        setState(() => _isSwitchingRole = false);
+        setState(() => _activeAction = HomeAction.none);
         
         // Show contextual error message
         String errorMessage = 'Failed to switch roles.';
@@ -1496,28 +1527,41 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           _buildHeaderIcon(
             Icons.calendar_today_outlined,
             isDarkMode,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const CalendarScreen()),
-              );
+            isLoading: _activeAction == HomeAction.calendar,
+            onTap: () async {
+              setState(() => _activeAction = HomeAction.calendar);
+              await Future.delayed(const Duration(milliseconds: 300));
+              if (mounted) {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const CalendarScreen()),
+                );
+                setState(() => _activeAction = HomeAction.none);
+              }
             },
           ),
           const SizedBox(width: 8),
           _buildHeaderIcon(
             Icons.settings_outlined,
             isDarkMode,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
+            isLoading: _activeAction == HomeAction.settings,
+            onTap: () async {
+              setState(() => _activeAction = HomeAction.settings);
+              await Future.delayed(const Duration(milliseconds: 300));
+              if (mounted) {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                );
+                setState(() => _activeAction = HomeAction.none);
+              }
             },
           ),
           const SizedBox(width: 8),
           _buildHeaderIcon(
             Icons.swap_horiz_rounded,
             isDarkMode,
+            isLoading: _activeAction == HomeAction.roleSwitch,
             onTap: _switchToSenior,
           ),
         ],
@@ -1528,10 +1572,11 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   Widget _buildHeaderIcon(
     IconData icon,
     bool isDarkMode, {
-    VoidCallback? onTap,
+    required VoidCallback onTap,
+    bool isLoading = false,
   }) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: isLoading ? null : onTap,
       child: Container(
         width: 44,
         height: 44,
@@ -1542,12 +1587,23 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
           ),
         ),
-        child: Icon(
-          icon,
-          size: 20,
-          color: isDarkMode
-              ? AppColors.textSecondaryDark
-              : AppColors.textSecondary,
+        child: Center(
+          child: isLoading
+              ? SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: isDarkMode ? Colors.white70 : AppColors.successGreen,
+                  ),
+                )
+              : Icon(
+                  icon,
+                  size: 20,
+                  color: isDarkMode
+                      ? AppColors.textSecondaryDark
+                      : AppColors.textPrimary,
+                ),
         ),
       ),
     );
