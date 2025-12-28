@@ -23,6 +23,7 @@ import 'package:arbaz_app/services/location_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:arbaz_app/models/user_model.dart';
 
 /// Model class for a family contact
 
@@ -1158,13 +1159,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
+    // FIX: Ensure we have a robust name for the QR payload immediately
+    // Priority: Current state name > Auth Display Name > Email prefix > "User"
+    String bestName = _userName;
+    if (bestName.isEmpty || bestName == 'U') {
+      bestName = user.displayName ?? user.email?.split('@').first ?? 'User';
+    }
+
     final qrService = context.read<QrInviteService>();
-    // Pass the current user's name into the invite data so the recipient
-    // can see the correct name immediately without Firestore lookup
     final inviteCode = qrService.generateInviteQrData(
       user.uid,
-      'senior',
-      name: _userName,
+      'senior', // or 'family' depending on context
+      name: bestName,
     );
 
     showModalBottomSheet(
@@ -1426,7 +1432,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             final result = qrService.validateQrData(code);
 
             if (result == null) {
-              // Close bottom sheet first, then show snackbar
               Navigator.pop(context);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -1438,78 +1443,97 @@ class _SettingsScreenState extends State<SettingsScreen> {
               return;
             }
 
-            // Valid code - check if not adding yourself
             final user = FirebaseAuth.instance.currentUser;
             if (user == null) return;
 
-            // Prevent adding yourself as family member
             if (result.uid == user.uid) {
               Navigator.pop(context);
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('You cannot add yourself as a family member'),
-                  ),
+                  const SnackBar(content: Text('You cannot add yourself')),
                 );
               }
               return;
             }
 
             final firestoreService = context.read<FirestoreService>();
-
-            // Close bottom sheet first so snackbar is visible
             Navigator.pop(context);
 
             try {
-              // Fetch profiles first (before atomic write)
-              // Use Future.wait for parallel fetches
+              // Attempt profile fetches
               final profileFutures = await Future.wait([
-                firestoreService.getUserProfile(result.uid),
-                firestoreService.getUserProfile(user.uid),
+                firestoreService
+                    .getUserProfile(result.uid)
+                    .catchError((_) => null),
+                firestoreService
+                    .getUserProfile(user.uid)
+                    .catchError((_) => null),
               ]);
               final invitedUserProfile = profileFutures[0];
               final currentUserProfile = profileFutures[1];
 
-              // Resolve invited user name with multiple fallbacks
-              // Priority: QR payload name > Firestore displayName > email prefix > placeholder
-              // Using the QR payload name as primary ensures correct display even if
-              // Firestore fetch is delayed due to security rules propagation
-              String invitedUserName = result.name ?? 'Family Member';
-              if (invitedUserProfile != null &&
-                  invitedUserProfile.displayName != null &&
-                  invitedUserProfile.displayName!.isNotEmpty) {
-                // If Firestore profile is available, use it (it may be more up-to-date)
-                invitedUserName = invitedUserProfile.displayName!;
-              } else if (invitedUserName == 'Family Member' &&
-                  invitedUserProfile != null &&
-                  invitedUserProfile.email.isNotEmpty) {
-                // Only fall back to email if we don't have a name from QR
-                invitedUserName = invitedUserProfile.email.split('@').first;
+              // FIX: Comprehensive name resolution logic
+              // Priority: QR name > Firestore profile > Auth > fallback
+              // QR name is prioritized because:
+              // 1. It's embedded by the inviter (User A) when generating the code
+              // 2. User B may not have Firestore read permissions for User A's
+              //    profile until AFTER the connection is created (security rules)
+              // 3. This prevents the "Family Member" bug during initial connection
+              String resolveName(
+                String? qrName,
+                UserProfile? profile,
+                User? auth,
+                String fallback,
+              ) {
+                // 1. QR code name - most reliable for the INVITED user since
+                //    it's embedded at code generation time
+                if (qrName != null &&
+                    qrName.trim().isNotEmpty &&
+                    qrName.trim() != 'Family Member' &&
+                    qrName.trim() != 'User') {
+                  return qrName.trim();
+                }
+                // 2. Firestore profile display name
+                if (profile?.displayName != null &&
+                    profile!.displayName!.trim().isNotEmpty) {
+                  return profile.displayName!.trim();
+                }
+                // 3. Email prefix from Firestore profile
+                if (profile?.email != null && profile!.email.isNotEmpty) {
+                  return profile.email.split('@').first;
+                }
+                // 4. Firebase Auth display name (for current user)
+                if (auth?.displayName != null && auth!.displayName!.isNotEmpty) {
+                  return auth.displayName!;
+                }
+                // 5. Firebase Auth email prefix (for current user)
+                if (auth?.email != null && auth!.email!.isNotEmpty) {
+                  return auth.email!.split('@').first;
+                }
+                return fallback;
               }
 
-              // Resolve current user name with multiple fallbacks
-              // Priority: Firestore displayName > Auth displayName > email prefix > placeholder
-              String currentUserName = 'Family Member';
-              if (currentUserProfile != null &&
-                  currentUserProfile.displayName != null &&
-                  currentUserProfile.displayName!.isNotEmpty) {
-                currentUserName = currentUserProfile.displayName!;
-              } else if (user.displayName != null &&
-                  user.displayName!.isNotEmpty) {
-                // Use Firebase Auth displayName as fallback
-                currentUserName = user.displayName!;
-              } else if (user.email != null) {
-                currentUserName = user.email!.split('@').first;
-              }
+              String invitedUserName = resolveName(
+                result.name,
+                invitedUserProfile,
+                null, // We don't have Auth object for the invited user
+                'Family Member',
+              );
 
-              // Use atomic method that writes everything in a single batch
-              // This prevents half-connected states and ensures data consistency
+              String currentUserName = resolveName(
+                null,
+                currentUserProfile,
+                user,
+                'Family Member',
+              );
+
               await firestoreService.createFamilyConnectionAtomic(
                 currentUserId: user.uid,
                 invitedUserId: result.uid,
                 currentUserName: currentUserName,
                 invitedUserName: invitedUserName,
-                currentUserPhone: currentUserProfile?.phoneNumber ?? '',
+                currentUserPhone:
+                    currentUserProfile?.phoneNumber ?? user.phoneNumber ?? '',
                 invitedUserPhone: invitedUserProfile?.phoneNumber ?? '',
                 invitedUserRole: result.role == 'senior' ? 'Senior' : 'Family',
               );
@@ -1597,6 +1621,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required String displayPhone,
     required bool isLoading,
   }) {
+    // FIX: Prevent redundant labels like "Family Member Family"
+    bool shouldShowRelationship =
+        contact.relationship.isNotEmpty &&
+        contact.relationship != 'Family' &&
+        contact.relationship != 'Family Member' &&
+        displayName != contact.relationship;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Row(
@@ -1624,7 +1655,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  displayName,
+                  displayName.isEmpty ? 'Unknown Member' : displayName,
                   style: GoogleFonts.inter(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
@@ -1642,7 +1673,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       color: isDarkMode ? Colors.white70 : Colors.black87,
                     ),
                   ),
-                if (contact.relationship.isNotEmpty)
+                if (shouldShowRelationship)
                   Text(
                     contact.relationship,
                     style: GoogleFonts.inter(
