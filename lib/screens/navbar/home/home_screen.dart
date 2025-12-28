@@ -1579,6 +1579,10 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   StreamSubscription? _seniorStateSubscription;
   String _familyName = ''; // Empty until loaded
   bool _isLoadingFamilyProfile = true; // Loading state for profile
+  
+  // Multi-senior support
+  List<SeniorInfo> _allSeniors = []; // All connected seniors
+  String? _selectedSeniorId; // Currently selected senior ID
 
   @override
   void initState() {
@@ -1678,12 +1682,19 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           )
           .first;
 
-      String? seniorId;
+      List<SeniorInfo> allSeniors = [];
 
       if (connections.isNotEmpty) {
-        // Use connections collection (preferred)
-        seniorId = connections.first.seniorId;
-        debugPrint('Found senior via connections: $seniorId');
+        // Collect all senior IDs from connections
+        for (final conn in connections) {
+          final profile = await firestoreService.getUserProfile(conn.seniorId)
+              .catchError((_) => null);
+          final name = profile?.displayName ?? 
+              profile?.email.split('@').first ?? 
+              'Senior';
+          allSeniors.add(SeniorInfo(id: conn.seniorId, name: name));
+        }
+        debugPrint('Found ${allSeniors.length} seniors via connections');
       } else {
         // Fallback: check familyContacts for any with relationship='Senior'
         debugPrint('No connections found, checking familyContacts...');
@@ -1703,67 +1714,110 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             )
             .toList();
 
-        if (seniorContacts.isNotEmpty) {
-          seniorId = seniorContacts.first.contactUid;
-          debugPrint('Found senior via familyContacts: $seniorId');
+        for (final contact in seniorContacts) {
+          final profile = await firestoreService.getUserProfile(contact.contactUid!)
+              .catchError((_) => null);
+          final name = profile?.displayName ?? 
+              (contact.name.isNotEmpty ? contact.name : 'Senior');
+          allSeniors.add(SeniorInfo(id: contact.contactUid!, name: name));
+        }
+        
+        if (allSeniors.isNotEmpty) {
+          debugPrint('Found ${allSeniors.length} seniors via familyContacts');
         } else {
           debugPrint('No seniors found in familyContacts either');
         }
       }
 
-      if (seniorId == null || seniorId.isEmpty) {
+      if (!mounted) return;
+
+      // Update state with all seniors
+      setState(() {
+        _allSeniors = allSeniors;
+        // If we have seniors but no selection, select the first one
+        if (allSeniors.isNotEmpty && _selectedSeniorId == null) {
+          _selectedSeniorId = allSeniors.first.id;
+        }
+      });
+
+      if (allSeniors.isEmpty) {
         if (mounted) setState(() => _isLoadingSeniorData = false);
         return;
       }
 
-      if (!mounted) return;
-
-      // Get Senior Name
-      final seniorProfile = await firestoreService.getUserProfile(seniorId);
-      final srName = seniorProfile?.displayName ?? 'Senior';
-
-      if (!mounted) return;
-
-      // Load Weekly Data
-      final history = await firestoreService.getSeniorCheckInsForWeek(seniorId);
-      final weeklyData = history
-          .map((h) => WellnessDataPoint.fromCheckIn(h))
-          .toList();
-
-      if (mounted) {
-        setState(() {
-          _weeklyWellnessData = weeklyData;
-        });
-      }
-
-      if (!mounted) return;
-
-      // Stream State
-      _seniorStateSubscription?.cancel();
-      _seniorStateSubscription = firestoreService
-          .streamSeniorState(seniorId)
-          .listen((state) {
-            if (!mounted) return;
-            final status = _calculateSeniorStatus(
-              state,
-              state?.checkInSchedules ?? [],
-            );
-            setState(() {
-              _seniorData = SeniorStatusData(
-                status: status,
-                seniorName: srName,
-                lastCheckIn: state?.lastCheckIn,
-                timeString: state?.lastCheckIn != null
-                    ? DateFormat('HH:mm').format(state!.lastCheckIn!)
-                    : null,
-              );
-              _isLoadingSeniorData = false;
-            });
-          });
+      // Load data for the selected senior
+      await _loadSeniorDetails(_selectedSeniorId!);
     } catch (e) {
       debugPrint('Error loading senior data: $e');
       if (mounted) setState(() => _isLoadingSeniorData = false);
     }
+  }
+
+  /// Load data for a specific senior by ID
+  Future<void> _loadSeniorDetails(String seniorId) async {
+    if (!mounted) return;
+    
+    final firestoreService = context.read<FirestoreService>();
+    
+    // Get Senior Name from allSeniors list
+    final seniorInfo = _allSeniors.firstWhere(
+      (s) => s.id == seniorId,
+      orElse: () => SeniorInfo(id: seniorId, name: 'Senior'),
+    );
+    final srName = seniorInfo.name;
+
+    if (!mounted) return;
+
+    // Load Weekly Data
+    final history = await firestoreService.getSeniorCheckInsForWeek(seniorId);
+    final weeklyData = history
+        .map((h) => WellnessDataPoint.fromCheckIn(h))
+        .toList();
+
+    if (mounted) {
+      setState(() {
+        _weeklyWellnessData = weeklyData;
+      });
+    }
+
+    if (!mounted) return;
+
+    // Stream State
+    _seniorStateSubscription?.cancel();
+    _seniorStateSubscription = firestoreService
+        .streamSeniorState(seniorId)
+        .listen((state) {
+          if (!mounted) return;
+          final status = _calculateSeniorStatus(
+            state,
+            state?.checkInSchedules ?? [],
+          );
+          setState(() {
+            _seniorData = SeniorStatusData(
+              status: status,
+              seniorName: srName,
+              lastCheckIn: state?.lastCheckIn,
+              timeString: state?.lastCheckIn != null
+                  ? DateFormat('HH:mm').format(state!.lastCheckIn!)
+                  : null,
+            );
+            _isLoadingSeniorData = false;
+          });
+        });
+  }
+
+  /// Called when user switches to a different senior in the dropdown
+  void _onSeniorChanged(String? seniorId) {
+    if (seniorId == null || seniorId == _selectedSeniorId) return;
+    
+    setState(() {
+      _selectedSeniorId = seniorId;
+      _isLoadingSeniorData = true;
+      _seniorData = null;
+      _weeklyWellnessData = [];
+    });
+    
+    _loadSeniorDetails(seniorId);
   }
 
   SeniorCheckInStatus _calculateSeniorStatus(
@@ -2221,8 +2275,8 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                   // Let's assume inviting a Senior.
                   final code = qrService.generateInviteQrData(
                     user.uid,
-                    'senior',
-                  ); // Invite senior?
+                    'family', // Family member generating invite for a Senior to scan
+                  );
                   await SharePlus.instance.share(ShareParams(text: code));
                 } else {
                   Navigator.pop(context);
@@ -2255,7 +2309,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       context: context,
       builder: (context) => FutureBuilder<String>(
         future: Future.value(
-          qrService.generateInviteQrData(user.uid, 'senior'),
+          qrService.generateInviteQrData(user.uid, 'family'), // Family generating invite
         ),
         builder: (context, snapshot) {
           // Handle error state
@@ -2379,6 +2433,12 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       padding: const EdgeInsets.all(20),
       child: Column(
         children: [
+          // Senior Selector Dropdown (only show if 2+ seniors)
+          if (_allSeniors.length >= 2) ...[
+            _buildSeniorSelector(isDarkMode),
+            const SizedBox(height: 16),
+          ],
+          
           const SizedBox(height: 8),
 
           // Dynamic Status Card
@@ -2409,6 +2469,91 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
 
           // AI Care Intelligence Card
           _buildAICareCard(isDarkMode, medStreak),
+        ],
+      ),
+    );
+  }
+
+  /// Builds a dropdown to select which senior to view (when 2+ seniors connected)
+  Widget _buildSeniorSelector(bool isDarkMode) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+        ),
+        boxShadow: isDarkMode ? null : [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.primaryBlue.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              Icons.people_alt_outlined,
+              size: 20,
+              color: AppColors.primaryBlue,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Viewing',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: isDarkMode 
+                        ? AppColors.textSecondaryDark 
+                        : AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                DropdownButton<String>(
+                  value: _selectedSeniorId,
+                  isExpanded: true,
+                  underline: const SizedBox(),
+                  isDense: true,
+                  icon: Icon(
+                    Icons.keyboard_arrow_down,
+                    color: isDarkMode ? Colors.white70 : Colors.black54,
+                  ),
+                  style: GoogleFonts.inter(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: isDarkMode ? Colors.white : Colors.black87,
+                  ),
+                  dropdownColor: isDarkMode ? AppColors.surfaceDark : Colors.white,
+                  items: _allSeniors.map((senior) {
+                    return DropdownMenuItem<String>(
+                      value: senior.id,
+                      child: Text(
+                        senior.name,
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: isDarkMode ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: _onSeniorChanged,
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -2762,7 +2907,17 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     if (_isLoadingSeniorData) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_seniorData == null) return const Center(child: Text("No Data"));
+    if (_seniorData == null) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: _buildHealthPlaceholderCard(
+          isDarkMode: isDarkMode,
+          icon: Icons.favorite_border,
+          title: 'No Health Data Available',
+          subtitle: 'Connect with a senior family member to view their wellness data and health insights.',
+        ),
+      );
+    }
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),

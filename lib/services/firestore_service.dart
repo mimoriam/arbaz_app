@@ -528,7 +528,7 @@ class FirestoreService {
       transaction.set(invitedUserContactRef, {
         'name': currentUserName,
         'phone': currentUserPhone,
-        'relationship': 'Family',
+        'relationship': invitedUserRole == 'Senior' ? 'Family' : 'Senior',
         'addedAt': Timestamp.now(),
         'contactUid': currentUserId,
       });

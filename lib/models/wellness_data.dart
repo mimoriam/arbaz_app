@@ -99,3 +99,11 @@ class SeniorStatusData {
     this.timeString,
   });
 }
+
+/// Basic info about a connected senior for dropdown selection
+class SeniorInfo {
+  final String id;
+  final String name;
+
+  SeniorInfo({required this.id, required this.name});
+}
