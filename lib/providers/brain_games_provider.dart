@@ -8,8 +8,9 @@ class BrainGamesProvider extends ChangeNotifier {
   bool _isEnabled = false;
   bool _isLoading = true;
   
-  /// Mutex-like lock for setEnabled operations
-  Completer<void>? _updateLock;
+  /// Async queue for serializing setEnabled operations
+  /// Each operation awaits the previous one before executing
+  Future<void> _operationQueue = Future.value();
   /// Track which user's state is loaded
   String? _loadedUserId;
 
@@ -80,21 +81,30 @@ class BrainGamesProvider extends ChangeNotifier {
   }
 
   /// Sets the enabled state with proper concurrency protection.
-  /// Uses a mutex-like pattern to prevent concurrent updates from corrupting state.
+  /// Uses an async queue pattern to serialize operations, eliminating TOCTOU bugs.
   Future<bool> setEnabled(bool enabled) async {
-    // Wait for any in-progress update to complete
-    if (_updateLock != null) {
-      await _updateLock!.future;
-    }
+    // Chain this operation onto the queue to ensure serialization
+    // This prevents multiple calls from racing between check and execution
+    final previousOperation = _operationQueue;
+    final completer = Completer<bool>();
+    
+    // Add our operation to the queue immediately
+    _operationQueue = completer.future.catchError((_) => false);
+    
+    // Wait for any previous operation to complete
+    await previousOperation;
     
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return false;
+    if (user == null) {
+      completer.complete(false);
+      return false;
+    }
 
     final previousEnabled = _isEnabled;
-    if (previousEnabled == enabled) return true; // No change needed
-
-    // Acquire lock
-    _updateLock = Completer<void>();
+    if (previousEnabled == enabled) {
+      completer.complete(true);
+      return true; // No change needed
+    }
 
     // Optimistic update
     _isEnabled = enabled;
@@ -107,17 +117,15 @@ class BrainGamesProvider extends ChangeNotifier {
         'brainGamesEnabled',
         enabled,
       );
+      completer.complete(true);
       return true;
     } catch (e) {
       // Unconditionally revert on failure
       _isEnabled = previousEnabled;
       notifyListeners();
       debugPrint('Error updating brain games state: $e');
+      completer.complete(false);
       return false;
-    } finally {
-      // Release lock
-      _updateLock?.complete();
-      _updateLock = null;
     }
   }
 }

@@ -181,8 +181,9 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
     _animationController.forward();
   }
 
-  /// Persists check-in data to Firestore (called when transitioning to success)
-  /// Throws an exception if the Firestore write fails
+  /// Persists check-in data to Firestore with retry logic.
+  /// Uses exponential backoff to handle transient network failures.
+  /// Throws an exception only after all retries are exhausted.
   Future<void> _persistCheckIn() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -229,8 +230,27 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
       locationAddress: address,
     );
 
-    // This is the critical operation - let exceptions propagate to caller
-    await firestoreService.recordCheckIn(user.uid, record);
+    // Retry logic with exponential backoff
+    const maxAttempts = 3;
+    var attempt = 0;
+    
+    while (attempt < maxAttempts) {
+      try {
+        await firestoreService.recordCheckIn(user.uid, record);
+        return; // Success!
+      } catch (e) {
+        attempt++;
+        debugPrint('Check-in attempt $attempt failed: $e');
+        
+        if (attempt >= maxAttempts) {
+          // All retries exhausted - propagate the error
+          throw Exception('Check-in failed after $maxAttempts attempts: $e');
+        }
+        
+        // Exponential backoff: 2s, 4s, 6s
+        await Future.delayed(Duration(seconds: attempt * 2));
+      }
+    }
   }
 
   /// Called when tapping BACK HOME - just navigates back

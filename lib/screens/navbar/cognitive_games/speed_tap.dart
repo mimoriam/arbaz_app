@@ -420,8 +420,21 @@ class _SpeedTapScreenState extends State<SpeedTapScreen>
   }
 
   Widget _buildGameArea(bool isDarkMode) {
+    // Build static content that doesn't change every frame
+    final staticContent = Column(
+      children: [
+        // Target display card
+        _buildTargetCard(isDarkMode),
+        const SizedBox(height: 32),
+        // Color options grid
+        _buildOptionsGrid(isDarkMode),
+      ],
+    );
+    
     return FadeTransition(
       opacity: _fadeAnimation,
+      // AnimatedBuilder with child parameter - child is built once,
+      // only the Transform is recalculated each frame
       child: AnimatedBuilder(
         animation: _shakeController,
         builder: (context, child) {
@@ -430,18 +443,10 @@ class _SpeedTapScreenState extends State<SpeedTapScreen>
               sin(_shakeController.value * pi * 4) * _shakeAnimation.value,
               0,
             ),
-            child: child,
+            child: child, // Pre-built widget, not rebuilt 60 times per second
           );
         },
-        child: Column(
-          children: [
-            // Target display card
-            _buildTargetCard(isDarkMode),
-            const SizedBox(height: 32),
-            // Color options grid
-            _buildOptionsGrid(isDarkMode),
-          ],
-        ),
+        child: staticContent, // Built once, passed to builder as child
       ),
     );
   }

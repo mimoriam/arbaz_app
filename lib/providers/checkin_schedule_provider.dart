@@ -14,10 +14,13 @@ class CheckInScheduleProvider extends ChangeNotifier {
   String? _loadedUserId;
   StreamSubscription<User?>? _authSubscription;
   
-  /// Lock to serialize load operations
-  Completer<void>? _loadLock;
-  /// The latest user ID that was requested to be loaded
-  String? _pendingLoadUserId;
+  /// Map of in-flight load requests keyed by user ID for request deduplication
+  /// If a load is already in progress for a user, callers wait for the same future
+  final Map<String, Completer<void>> _loadRequests = {};
+  
+  /// Track listener count for proper subscription management
+  /// Only subscribe to auth changes when there are active listeners
+  int _listenerCount = 0;
 
   CheckInScheduleProvider(this._scheduleService);
 
@@ -35,13 +38,71 @@ class CheckInScheduleProvider extends ChangeNotifier {
       await _loadSchedules(user.uid);
     }
   }
+  
+  @override
+  void addListener(VoidCallback listener) {
+    super.addListener(listener);
+    _listenerCount++;
+    // Start listening when first listener attaches
+    if (_listenerCount == 1) {
+      _startAuthListening();
+    }
+  }
+  
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    _listenerCount--;
+    // Stop listening when last listener detaches
+    if (_listenerCount == 0) {
+      _stopAuthListening();
+    }
+  }
+  
+  void _startAuthListening() {
+    if (_authSubscription != null) return; // Already listening
+    
+    _authSubscription = FirebaseAuth.instance.authStateChanges().listen(
+      (user) async {
+        if (user == null) {
+          // User signed out - reset state immediately
+          _loadRequests.clear();
+          _schedules = [];
+          _loadedUserId = null;
+          _isLoading = false;
+          notifyListeners();
+        } else if (_loadedUserId != user.uid) {
+          // Different user signed in - trigger load
+          await _loadSchedules(user.uid);
+        }
+      },
+      onError: (error) {
+        debugPrint('CheckInScheduleProvider auth stream error: $error');
+      },
+    );
+    
+    // Load initial state
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null && _loadedUserId != user.uid) {
+      _schedules = [];
+      _loadSchedules(user.uid);
+    } else if (user == null) {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+  
+  void _stopAuthListening() {
+    _authSubscription?.cancel();
+    _authSubscription = null;
+  }
 
   Future<void> init() async {
     final user = FirebaseAuth.instance.currentUser;
     final currentUid = user?.uid;
     
-    // Return early if already initialized for the same user and not loading
-    if (_loadedUserId != null && _loadedUserId == currentUid && _loadLock == null) {
+    // Return early if already initialized for the same user and no request in flight
+    if (_loadedUserId != null && _loadedUserId == currentUid && !_loadRequests.containsKey(currentUid)) {
       return;
     }
     
@@ -50,14 +111,13 @@ class CheckInScheduleProvider extends ChangeNotifier {
       (user) async {
         if (user == null) {
           // User signed out - reset state immediately
-          _pendingLoadUserId = null;
+          _loadRequests.clear();
           _schedules = [];
           _loadedUserId = null;
           _isLoading = false;
           notifyListeners();
         } else if (_loadedUserId != user.uid) {
           // Different user signed in - trigger load
-          // Store as pending and trigger load (will be serialized by lock)
           await _loadSchedules(user.uid);
         }
       },
@@ -80,24 +140,22 @@ class CheckInScheduleProvider extends ChangeNotifier {
   @override
   void dispose() {
     _authSubscription?.cancel();
+    _loadRequests.clear();
     super.dispose();
   }
 
+  /// Loads schedules for a user with request deduplication.
+  /// If a load is already in progress for this user, callers wait for
+  /// the same future instead of starting a new request.
   Future<void> _loadSchedules(String uid) async {
-    // Record this as the latest requested user
-    _pendingLoadUserId = uid;
-    
-    // Wait for any in-progress load to complete
-    if (_loadLock != null) {
-      await _loadLock!.future;
-      // After waiting, check if we're still the latest request
-      if (_pendingLoadUserId != uid) {
-        return; // A newer request came in, abandon this one
-      }
+    // If already loading this user, return the existing request
+    if (_loadRequests.containsKey(uid)) {
+      return _loadRequests[uid]!.future;
     }
     
-    // Acquire lock
-    _loadLock = Completer<void>();
+    // Create a new request completer for this user
+    final completer = Completer<void>();
+    _loadRequests[uid] = completer;
     
     _isLoading = true;
     _error = null;
@@ -106,13 +164,14 @@ class CheckInScheduleProvider extends ChangeNotifier {
     try {
       final schedules = await _scheduleService.getSchedules(uid);
       
-      // Verify we're still loading for the same user before applying
-      if (_pendingLoadUserId == uid) {
+      // Only apply if this user is still the target
+      // (check if request wasn't superseded by logout/different user)
+      if (_loadRequests.containsKey(uid)) {
         _schedules = schedules;
         _loadedUserId = uid;
       }
     } catch (e) {
-      if (_pendingLoadUserId == uid) {
+      if (_loadRequests.containsKey(uid)) {
         _error = e.toString();
       }
       debugPrint('Error loading schedules: $e');
@@ -120,15 +179,9 @@ class CheckInScheduleProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
       
-      // Release lock
-      _loadLock?.complete();
-      _loadLock = null;
-      
-      // Check if there's a newer pending request
-      if (_pendingLoadUserId != null && _pendingLoadUserId != uid) {
-        // A different user was requested while we were loading
-        await _loadSchedules(_pendingLoadUserId!);
-      }
+      // Remove this request and complete it
+      _loadRequests.remove(uid);
+      completer.complete();
     }
   }
 

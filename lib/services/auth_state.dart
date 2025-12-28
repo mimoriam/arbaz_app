@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'auth_service.dart';
@@ -63,8 +65,9 @@ class AuthState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Execute auth operation with loading state and error handling
-  /// Returns [AuthResult] to distinguish success from failure
+  /// Execute auth operation with loading state and error handling.
+  /// Returns [AuthResult] to distinguish success from failure.
+  /// Only catches expected exceptions - programming errors are not caught.
   Future<AuthResult<T>> execute<T>(Future<T> Function() operation) async {
     if (isRateLimited) {
       _errorMessage = 'Too many attempts. Please wait and try again.';
@@ -83,14 +86,20 @@ class AuthState extends ChangeNotifier {
       _errorMessage = _mapError(e.code);
       debugPrint('Auth error: ${e.code} - ${e.message}');
       return AuthFailure(_errorMessage!);
-    } catch (e) {
-      _errorMessage = 'Something went wrong. Please try again.';
-      debugPrint('Unknown auth error: $e');
+    } on SocketException catch (e) {
+      _errorMessage = 'Network error. Please check your connection.';
+      debugPrint('Network error: $e');
+      return AuthFailure(_errorMessage!);
+    } on TimeoutException catch (e) {
+      _errorMessage = 'Request timed out. Please try again.';
+      debugPrint('Timeout error: $e');
       return AuthFailure(_errorMessage!);
     } finally {
       _isLoading = false;
       notifyListeners();
     }
+    // Note: Programming errors (StateError, TypeError, etc.) are NOT caught
+    // They will crash the app, making bugs visible in development
   }
 
   /// Map Firebase error codes to user-friendly messages

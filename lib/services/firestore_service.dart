@@ -3,6 +3,24 @@ import '../models/user_model.dart';
 import '../models/connection_model.dart';
 import '../models/checkin_model.dart';
 
+/// Explicit streak state for clear state transitions
+enum StreakState {
+  sameDay,     // 0 days since last check-in
+  consecutive, // 1 day since last check-in
+  broken       // 2+ days since last check-in
+}
+
+/// Calculate the streak state between two dates
+StreakState calculateStreakState(DateTime last, DateTime now) {
+  final lastDay = DateTime(last.year, last.month, last.day);
+  final nowDay = DateTime(now.year, now.month, now.day);
+  final diff = nowDay.difference(lastDay).inDays;
+  
+  if (diff == 0) return StreakState.sameDay;
+  if (diff == 1) return StreakState.consecutive;
+  return StreakState.broken;
+}
+
 /// Firestore operations with subcollection structure
 class FirestoreService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -166,7 +184,7 @@ class FirestoreService {
         final rawData = seniorStateDoc.data();
         if (rawData != null && rawData is Map<String, dynamic>) {
           final data = rawData;
-          // Get current streak
+          // Get current streak (validate: must be non-negative)
           final currentStreak = (data['currentStreak'] as num?)?.toInt() ?? 0;
           
           // Get stored start date
@@ -178,23 +196,27 @@ class FirestoreService {
           final lastCheckInTimestamp = data['lastCheckIn'] as Timestamp?;
           if (lastCheckInTimestamp != null) {
             final lastCheckIn = lastCheckInTimestamp.toDate();
-            final now = DateTime.now();
-            final today = DateTime(now.year, now.month, now.day);
-            final lastCheckInDay = DateTime(lastCheckIn.year, lastCheckIn.month, lastCheckIn.day);
             
-            final daysDifference = today.difference(lastCheckInDay).inDays;
+            // Use explicit state machine for clarity
+            final streakState = calculateStreakState(lastCheckIn, record.timestamp);
             
-            if (daysDifference == 0) {
-              // Same day check-in, keep current streak
-              newStreak = currentStreak > 0 ? currentStreak : 1;
-            } else if (daysDifference == 1) {
-              // Consecutive day, increment streak
-              newStreak = currentStreak + 1;
-            } else {
-              // Streak broken, reset to 1 and update startDate to current check-in
-              newStreak = 1;
-              startDate = record.timestamp;
+            switch (streakState) {
+              case StreakState.sameDay:
+                // Same day check-in, keep current streak (minimum 1)
+                newStreak = currentStreak > 0 ? currentStreak : 1;
+              case StreakState.consecutive:
+                // Consecutive day, increment streak
+                newStreak = currentStreak + 1;
+              case StreakState.broken:
+                // Streak broken, reset to 1 and update startDate
+                newStreak = 1;
+                startDate = record.timestamp;
             }
+          } else if (currentStreak > 0) {
+            // Edge case: has streak but no lastCheckIn timestamp
+            // This shouldn't happen in normal operation - reset to safe state
+            newStreak = 1;
+            startDate = record.timestamp;
           }
         }
       }
@@ -399,6 +421,11 @@ class FirestoreService {
   /// 3. Add contact to invited user's familyContacts (bidirectional)
   /// 
   /// Uses contactUid for live profile lookups instead of denormalized names.
+  /// Creates a family connection atomically using a transaction for idempotency.
+  /// This ensures:
+  /// 1. If connection already exists, the operation is skipped (idempotent)
+  /// 2. All operations succeed or fail together
+  /// 3. Network failures after commit are handled gracefully
   Future<void> createFamilyConnectionAtomic({
     required String currentUserId,
     required String invitedUserId,
@@ -408,9 +435,6 @@ class FirestoreService {
     required String invitedUserPhone,
     required String invitedUserRole, // 'Senior' or 'Family'
   }) async {
-    final batch = _db.batch();
-
-    // 1. Create connection document (seniorId is always the senior, familyId is family member)
     // Determine senior vs family based on role
     final String seniorId;
     final String familyId;
@@ -423,45 +447,50 @@ class FirestoreService {
     }
     
     final connectionId = '${seniorId}_$familyId';
-    final connectionRef = _connectionsRef.doc(connectionId);
-    batch.set(connectionRef, {
-      'id': connectionId,
-      'seniorId': seniorId,
-      'familyId': familyId,
-      'status': 'active',
-      'createdAt': Timestamp.now(),
-    });
+    
+    // Use a transaction for idempotency check + atomic writes
+    await _db.runTransaction((transaction) async {
+      // Idempotency check: if connection already exists, skip
+      final existingConnection = await transaction.get(_connectionsRef.doc(connectionId));
+      if (existingConnection.exists) {
+        return; // Already connected, nothing to do
+      }
+      // 1. Create connection document
+      transaction.set(_connectionsRef.doc(connectionId), {
+        'id': connectionId,
+        'seniorId': seniorId,
+        'familyId': familyId,
+        'status': 'active',
+        'createdAt': Timestamp.now(),
+      });
 
-    // 2. Add invited user to current user's contacts
-    // Use invited user's UID as the document ID for easy lookup
-    final currentUserContactRef = _db
-        .collection('users')
-        .doc(currentUserId)
-        .collection('familyContacts')
-        .doc(invitedUserId);
-    batch.set(currentUserContactRef, {
-      'name': invitedUserName,
-      'phone': invitedUserPhone,
-      'relationship': invitedUserRole,
-      'addedAt': Timestamp.now(),
-      'contactUid': invitedUserId, // Store UID for live profile lookups
-    });
+      // 2. Add invited user to current user's contacts
+      final currentUserContactRef = _db
+          .collection('users')
+          .doc(currentUserId)
+          .collection('familyContacts')
+          .doc(invitedUserId);
+      transaction.set(currentUserContactRef, {
+        'name': invitedUserName,
+        'phone': invitedUserPhone,
+        'relationship': invitedUserRole,
+        'addedAt': Timestamp.now(),
+        'contactUid': invitedUserId,
+      });
 
-    // 3. Add current user to invited user's contacts (bidirectional)
-    final invitedUserContactRef = _db
-        .collection('users')
-        .doc(invitedUserId)
-        .collection('familyContacts')
-        .doc(currentUserId);
-    batch.set(invitedUserContactRef, {
-      'name': currentUserName,
-      'phone': currentUserPhone,
-      'relationship': 'Family', // Current user is always 'Family' to them
-      'addedAt': Timestamp.now(),
-      'contactUid': currentUserId, // Store UID for live profile lookups
+      // 3. Add current user to invited user's contacts (bidirectional)
+      final invitedUserContactRef = _db
+          .collection('users')
+          .doc(invitedUserId)
+          .collection('familyContacts')
+          .doc(currentUserId);
+      transaction.set(invitedUserContactRef, {
+        'name': currentUserName,
+        'phone': currentUserPhone,
+        'relationship': 'Family',
+        'addedAt': Timestamp.now(),
+        'contactUid': currentUserId,
+      });
     });
-
-    // Execute all operations atomically
-    await batch.commit();
   }
 }

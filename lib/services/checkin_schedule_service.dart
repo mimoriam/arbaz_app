@@ -60,19 +60,22 @@ class CheckInScheduleService {
     await _firestoreService.atomicRemoveSchedule(uid, normalizedTime);
   }
 
-  /// Sorts schedules by time (for display purposes only)
+  /// Sorts schedules by time (for display purposes only).
+  /// Parses each time once, then sorts by the parsed value for efficiency.
   List<String> sortSchedules(List<String> schedules) {
-    final sorted = List<String>.from(schedules);
-    sorted.sort((a, b) {
-      final aMinutes = _timeToMinutes(a);
-      final bMinutes = _timeToMinutes(b);
-      // If both failed to parse, keep their relative order
-      if (aMinutes == null && bMinutes == null) return 0;
-      // Place unparsable entries at the end
-      if (aMinutes == null) return 1;
-      if (bMinutes == null) return -1;
-      return aMinutes.compareTo(bMinutes);
+    // Parse all times once upfront for O(n) parsing vs O(n log n) in sort
+    final parsed = schedules.map((s) => 
+      MapEntry(s, _timeToMinutes(s))
+    ).toList();
+    
+    parsed.sort((a, b) {
+      // Handle null cases (unparsable times go to end)
+      if (a.value == null && b.value == null) return 0;
+      if (a.value == null) return 1;
+      if (b.value == null) return -1;
+      return a.value!.compareTo(b.value!);
     });
-    return sorted;
+    
+    return parsed.map((e) => e.key).toList();
   }
 }
