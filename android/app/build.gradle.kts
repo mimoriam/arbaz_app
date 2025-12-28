@@ -14,6 +14,7 @@ android {
     ndkVersion = "28.2.13676358"
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -27,6 +28,9 @@ android {
         applicationId = "com.example.arbaz_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // MultiDex is needed usually if desugaring is on and minSdk is low, but 24 is high enough for native checks often, 
+        // strictly speaking desugaring requires the dependency.
+        multiDexEnabled = true
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -45,4 +49,8 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

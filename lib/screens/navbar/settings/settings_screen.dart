@@ -1533,6 +1533,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 'Family Member',
               );
 
+              // Step 1: Create the connection
               await firestoreService.createFamilyConnectionAtomic(
                 currentUserId: user.uid,
                 invitedUserId: result.uid,
@@ -1543,6 +1544,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 invitedUserPhone: invitedUserProfile?.phoneNumber ?? '',
                 invitedUserRole: result.role == 'senior' ? 'Senior' : 'Family',
               );
+              
+              // Step 2: Update role flags (additive, not replacing)
+              // Only set the new flag, keeping existing flags intact
+              try {
+                if (result.role == 'senior') {
+                  // Current user is family, invited user is senior
+                  // Only set isFamilyMember=true, keep isSenior if it exists
+                  await firestoreService.setRole(
+                    user.uid,
+                    isFamilyMember: true,
+                    // Don't touch isSenior - keep current value
+                  );
+                } else {
+                  // Current user is senior, invited user is family
+                  // Only set isSenior=true, keep isFamilyMember if it exists
+                  await firestoreService.setRole(
+                    user.uid,
+                    isSenior: true,
+                    // Don't touch isFamilyMember - keep current value
+                  );
+                }
+              } catch (roleError) {
+                // Role update failed - try to rollback the connection
+                debugPrint('Role update failed: $roleError. Attempting rollback...');
+                try {
+                  await firestoreService.deleteFamilyConnection(
+                    user.uid,
+                    result.uid,
+                  );
+                  debugPrint('Connection rolled back successfully');
+                } catch (rollbackError) {
+                  debugPrint('Rollback also failed: $rollbackError');
+                }
+                // Re-throw the original error
+                rethrow;
+              }
 
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(

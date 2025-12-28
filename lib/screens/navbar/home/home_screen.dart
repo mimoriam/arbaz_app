@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:arbaz_app/screens/navbar/calendar/calendar_screen.dart';
 import 'package:arbaz_app/screens/navbar/cognitive_games/cognitive_games_screen.dart';
 import 'package:arbaz_app/screens/navbar/home/senior_checkin_flow.dart';
@@ -18,6 +19,12 @@ import 'package:arbaz_app/models/family_contact_model.dart';
 import 'package:arbaz_app/services/qr_invite_service.dart'; // For invite
 import 'package:share_plus/share_plus.dart'; // For sharing invites
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'package:intl/intl.dart';
+import 'package:arbaz_app/models/wellness_data.dart';
+import 'package:geolocator/geolocator.dart';
+
+import 'package:arbaz_app/models/user_model.dart';
 
 /// Represents the different status states for the senior user
 enum SafetyStatus {
@@ -40,7 +47,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   SafetyStatus _currentStatus = SafetyStatus.safe;
   bool _isSendingHelp = false;
   bool _hasCheckedInToday = false;
-  bool _isLoadingCheckInStatus = true; // Prevents flicker/interaction until status loaded
+  bool _isLoadingCheckInStatus =
+      true; // Prevents flicker/interaction until status loaded
   HomeAction _activeAction = HomeAction.none;
   int _currentStreak = 0; // Dynamic streak - loaded from Firestore
   late AnimationController _pulseController;
@@ -62,7 +70,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     _pulseAnimation = Tween<double>(begin: 1.0, end: 1.08).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
-    
+
     // Initialize data after the widget is fully inserted in the tree
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initData();
@@ -88,20 +96,41 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     if (user != null) {
       final firestoreService = context.read<FirestoreService>();
       final quotesService = context.read<DailyQuotesService>();
+
+      // OPTIMIZATION: Try to get name from Auth first (no Firestore read needed)
+      // This saves Firestore reads for Google/Apple sign-in users
+      String? nameFromAuth;
+      if (user.displayName != null && user.displayName!.isNotEmpty) {
+        nameFromAuth = user.displayName!.split(' ').first;
+      } else if (user.email != null && user.email!.isNotEmpty) {
+        nameFromAuth = user.email!.split('@').first;
+      }
       
-      // Load Profile for Name
+      // Set name immediately from Auth if available
+      if (nameFromAuth != null && nameFromAuth.isNotEmpty && mounted) {
+        setState(() => _userName = nameFromAuth!);
+      }
+
+      // Load Profile - needed for location and for email/password users' custom displayName
       final profile = await firestoreService.getUserProfile(user.uid);
       if (mounted) {
-        String nameToUse = '';
-        if (profile?.displayName != null && profile!.displayName!.isNotEmpty) {
-          nameToUse = profile.displayName!.split(' ').first;
-        } else if (user.displayName != null && user.displayName!.isNotEmpty) {
-          // Fallback to Firebase Auth displayName (e.g., from Google Sign-In)
-          nameToUse = user.displayName!.split(' ').first;
+        // For email/password users who set displayName in Firestore, use that instead
+        if (profile?.displayName != null && 
+            profile!.displayName!.isNotEmpty &&
+            (nameFromAuth == null || nameFromAuth.isEmpty || 
+             // If auth name is just email prefix, prefer Firestore displayName
+             (user.displayName == null || user.displayName!.isEmpty))) {
+          setState(() {
+            _userName = profile.displayName!.split(' ').first;
+          });
         }
-        setState(() {
-          _userName = nameToUse;
-        });
+        
+        // Populate last check-in location from profile
+        if (profile?.locationAddress != null) {
+          setState(() {
+            _lastCheckInLocation = profile!.locationAddress;
+          });
+        }
       }
 
       // Load Senior State for Check-in status
@@ -111,55 +140,199 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           final lastCheckIn = seniorState.lastCheckIn;
           if (lastCheckIn != null) {
             final now = DateTime.now();
-            final isToday = lastCheckIn.year == now.year && 
-                            lastCheckIn.month == now.month && 
-                            lastCheckIn.day == now.day;
-            
+            final isToday =
+                lastCheckIn.year == now.year &&
+                lastCheckIn.month == now.month &&
+                lastCheckIn.day == now.day;
+
             setState(() {
               _hasCheckedInToday = isToday;
               _currentStreak = seniorState.currentStreak;
               _isLoadingCheckInStatus = false; // Status verified
               if (isToday) {
-                 _currentStatus = SafetyStatus.safe;
-                 _pulseController.stop();
+                _currentStatus = SafetyStatus.safe;
+                _pulseController.stop();
               }
             });
           } else {
             setState(() {
               _currentStreak = seniorState.currentStreak;
-              _isLoadingCheckInStatus = false; // Status verified (no check-in yet)
+              _isLoadingCheckInStatus =
+                  false; // Status verified (no check-in yet)
             });
           }
         } else {
           // No senior state found - still mark as loaded
           setState(() => _isLoadingCheckInStatus = false);
         }
-        
-        // Populate last check-in location from profile (stored during check-in)
-        if (profile?.locationAddress != null) {
-          setState(() {
-            _lastCheckInLocation = profile!.locationAddress;
-          });
-        }
       }
-      
+
       // Cache daily quote
       final quote = quotesService.getQuoteForToday(user.uid, DateTime.now());
       if (mounted) {
         setState(() => _todayQuote = quote);
       }
-      
     }
   }
 
-  /// Check location permission status (no auto-request)
+  /// Check and request location permission if needed
+  /// Shows explanation dialog before requesting to meet app requirements
   Future<void> _checkLocationPermission() async {
     if (!mounted) return;
     final locationService = context.read<LocationService>();
     final permission = await locationService.checkPermission();
-    
-    // Just log the status - don't auto-request to respect user choice
+
     debugPrint('Location permission status: $permission');
+    
+    if (permission == LocationPermission.denied) {
+      // Show explanation dialog before requesting
+      if (!mounted) return;
+      
+      final shouldRequest = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryBlue.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.location_on,
+                  color: AppColors.primaryBlue,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Location Access',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'SafeCheck needs your location to include in your daily check-ins. '
+            'This helps your family know you\'re safe at home.',
+            style: GoogleFonts.inter(fontSize: 15, height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(
+                'Not Now',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryBlue,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: Text(
+                'Allow',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+      
+      if (shouldRequest == true && mounted) {
+        await locationService.requestPermission();
+      }
+    } else if (permission == LocationPermission.deniedForever) {
+      // Show settings dialog for permanently denied permission
+      if (!mounted) return;
+      
+      await showDialog(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.warningOrange.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.location_off,
+                  color: AppColors.warningOrange,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Location Required',
+                  style: GoogleFonts.inter(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'Location permission was previously denied. Please enable it in Settings '
+            'to use SafeCheck\'s full features.',
+            style: GoogleFonts.inter(fontSize: 15, height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(
+                'Later',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey,
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(dialogContext);
+                await Geolocator.openAppSettings();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryBlue,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: Text(
+                'Open Settings',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   @override
@@ -197,26 +370,27 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       if (!mounted) return;
 
       // Step 3: Navigate only after both operations succeed
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => targetScreen),
-      );
+      Navigator.of(
+        context,
+      ).pushReplacement(MaterialPageRoute(builder: (_) => targetScreen));
     } catch (e, stackTrace) {
       debugPrint('Error switching to $targetRole: $e');
       debugPrint('Stack trace: $stackTrace');
-      
+
       if (mounted) {
         setState(() => _activeAction = HomeAction.none);
-        
+
         // Show contextual error message
         String errorMessage = 'Failed to switch roles.';
         if (e.toString().contains('permission')) {
           errorMessage = 'Permission denied. Please try again later.';
-        } else if (e.toString().contains('network') || e.toString().contains('connection')) {
+        } else if (e.toString().contains('network') ||
+            e.toString().contains('connection')) {
           errorMessage = 'Network error. Please check your connection.';
         } else if (e.toString().contains('unavailable')) {
           errorMessage = 'Service unavailable. Please try again later.';
         }
-        
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(errorMessage, style: GoogleFonts.inter()),
@@ -271,7 +445,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           onComplete: () {
             setState(() {
               _hasCheckedInToday = true;
-              _currentStatus = SafetyStatus.safe; // Now shows blue "I'M SAFE" button
+              _currentStatus =
+                  SafetyStatus.safe; // Now shows blue "I'M SAFE" button
               _currentStreak++; // Increment streak on successful check-in
               // Stop pulse animation after successful check-in
               _pulseController.stop();
@@ -293,7 +468,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       barrierDismissible: false,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: Row(
             children: [
               Container(
@@ -302,10 +479,20 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                   color: AppColors.dangerRed.withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.warning_amber_rounded, color: AppColors.dangerRed, size: 24),
+                child: const Icon(
+                  Icons.warning_amber_rounded,
+                  color: AppColors.dangerRed,
+                  size: 24,
+                ),
               ),
               const SizedBox(width: 12),
-              Text('Emergency Alert', style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w700)),
+              Text(
+                'Emergency Alert',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ],
           ),
           content: Text(
@@ -315,7 +502,13 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
-              child: Text('Cancel', style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: Colors.grey)),
+              child: Text(
+                'Cancel',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey,
+                ),
+              ),
             ),
             ElevatedButton(
               onPressed: () {
@@ -324,9 +517,17 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.dangerRed,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
-              child: Text('Send Alert', style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: Colors.white)),
+              child: Text(
+                'Send Alert',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
             ),
           ],
         );
@@ -395,7 +596,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                         // Large Status Circle Button
                         _buildStatusButton(
                           isVacationMode: isVacationMode,
-                          isLoading: vacationProvider.isLoading || _isLoadingCheckInStatus,
+                          isLoading:
+                              vacationProvider.isLoading ||
+                              _isLoadingCheckInStatus,
                         ),
 
                         SizedBox(height: screenHeight * 0.05),
@@ -506,7 +709,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                     await Navigator.push(
                       context,
                       MaterialPageRoute(
-                          builder: (context) => const CalendarScreen()),
+                        builder: (context) => const CalendarScreen(),
+                      ),
                     );
                     if (mounted) {
                       setState(() => _activeAction = HomeAction.none);
@@ -526,7 +730,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                   if (mounted) {
                     await Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const CognitiveGamesScreen()),
+                      MaterialPageRoute(
+                        builder: (context) => const CognitiveGamesScreen(),
+                      ),
                     );
                     if (mounted) {
                       setState(() => _activeAction = HomeAction.none);
@@ -546,7 +752,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                   if (mounted) {
                     await Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                      MaterialPageRoute(
+                        builder: (context) => const SettingsScreen(),
+                      ),
                     );
                     if (mounted) {
                       setState(() => _activeAction = HomeAction.none);
@@ -599,17 +807,15 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                     height: 20,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: isDarkMode ? Colors.white70 : AppColors.primaryBlue,
+                      color: isDarkMode
+                          ? Colors.white70
+                          : AppColors.primaryBlue,
                     ),
                   )
                 : Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        icon,
-                        size: 20,
-                        color: AppColors.primaryBlue,
-                      ),
+                      Icon(icon, size: 20, color: AppColors.primaryBlue),
                       const SizedBox(height: 4),
                       Text(
                         label,
@@ -711,7 +917,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     // Green: Default (not checked in) - clickable
     // Blue: After questionnaire completed - NOT clickable
     // Yellow: Running late (SafetyStatus.ok without questionnaire completion)
-    
+
     Color primaryColor;
     Color secondaryColor;
     Color ringColor;
@@ -727,7 +933,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       ringColor = Colors.grey.shade300;
       statusIcon = Icons.check;
       statusText = isLoading ? "LOADING..." : "I'M OK";
-      subtitleText = isLoading ? "Syncing status..." : "Disabled during vacation";
+      subtitleText = isLoading
+          ? "Syncing status..."
+          : "Disabled during vacation";
       isClickable = false;
     } else if (_hasCheckedInToday) {
       // Blue state - completed questionnaire (not clickable)
@@ -831,11 +1039,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                               color: primaryColor,
                             ),
                           )
-                        : Icon(
-                            statusIcon,
-                            color: primaryColor,
-                            size: 28,
-                          ),
+                        : Icon(statusIcon, color: primaryColor, size: 28),
                   ),
                   const SizedBox(height: 16),
 
@@ -883,7 +1087,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       dotColor = AppColors.successGreen;
       // Use cached daily quote
       message = _todayQuote ?? "Have a wonderful day!";
-      
+
       if (_lastCheckInLocation != null) {
         subMessage = "Checked in from $_lastCheckInLocation";
       }
@@ -967,7 +1171,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                                 ? AppColors.textPrimaryDark
                                 : AppColors.textPrimary,
                             height: 1.4,
-                            fontStyle: _hasCheckedInToday ? FontStyle.italic : FontStyle.normal,
+                            fontStyle: _hasCheckedInToday
+                                ? FontStyle.italic
+                                : FontStyle.normal,
                           ),
                         ),
                         if (subMessage != null) ...[
@@ -976,8 +1182,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                             subMessage,
                             style: GoogleFonts.inter(
                               fontSize: 13,
-                              color: isDarkMode 
-                                  ? AppColors.textSecondaryDark 
+                              color: isDarkMode
+                                  ? AppColors.textSecondaryDark
                                   : AppColors.textSecondary,
                             ),
                           ),
@@ -995,140 +1201,169 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   }
 
   void _onInviteFamily() {
-     // Show invite options
-     showModalBottomSheet(
-       context: context,
-       backgroundColor: Colors.transparent,
-       builder: (context) => Container(
-         padding: const EdgeInsets.all(24),
-         decoration: const BoxDecoration(
-           color: Colors.white,
-           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-         ),
-         child: Column(
-           mainAxisSize: MainAxisSize.min,
-           children: [
-             Text(
-               "Invite Family Members",
-               style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.bold),
-             ),
-             const SizedBox(height: 16),
-             Text(
-               "Share your unique code so family can monitor your safety.",
-               textAlign: TextAlign.center,
-               style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600]),
-             ),
-             const SizedBox(height: 24),
-             ListTile(
-               leading: const CircleAvatar(backgroundColor: Color(0xFFE3F2FD), child: Icon(Icons.share, color: AppColors.primaryBlue)),
-               title: const Text("Share Invite Code"),
-               onTap: () async {
-                  final user = FirebaseAuth.instance.currentUser;
-                  if (user != null) {
-                    final qrService = context.read<QrInviteService>();
-                    Navigator.pop(context); // Close sheet
-                    // Generate code for family role
-                    final code = qrService.generateInviteQrData(user.uid, 'family');
-                    await SharePlus.instance.share(ShareParams(text: code));
-                  } else {
-                    Navigator.pop(context);
-                  }
-               },             ),
-             ListTile(
-               leading: const CircleAvatar(backgroundColor: Color(0xFFE3F2FD), child: Icon(Icons.qr_code, color: AppColors.primaryBlue)),
-               title: const Text("Show QR Code"),
-               onTap: () {
-                 Navigator.pop(context);
-                 _showQrDialog();
-               },
-             ),
-             const SizedBox(height: 16),
-           ],
-         ),
-       ),
-     );
+    // Show invite options
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "Invite Family Members",
+              style: GoogleFonts.inter(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              "Share your unique code so family can monitor your safety.",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 24),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFFE3F2FD),
+                child: Icon(Icons.share, color: AppColors.primaryBlue),
+              ),
+              title: const Text("Share Invite Code"),
+              onTap: () async {
+                final user = FirebaseAuth.instance.currentUser;
+                if (user != null) {
+                  final qrService = context.read<QrInviteService>();
+                  Navigator.pop(context); // Close sheet
+                  // Generate code for family role
+                  final code = qrService.generateInviteQrData(
+                    user.uid,
+                    'family',
+                  );
+                  await SharePlus.instance.share(ShareParams(text: code));
+                } else {
+                  Navigator.pop(context);
+                }
+              },
+            ),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFFE3F2FD),
+                child: Icon(Icons.qr_code, color: AppColors.primaryBlue),
+              ),
+              title: const Text("Show QR Code"),
+              onTap: () {
+                Navigator.pop(context);
+                _showQrDialog();
+              },
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showQrDialog() {
-     final user = FirebaseAuth.instance.currentUser;
-     if (user == null) {
-       ScaffoldMessenger.of(context).showSnackBar(
-         const SnackBar(content: Text("User session not found. Please log in again."))
-       );
-       return;
-     }
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("User session not found. Please log in again."),
+        ),
+      );
+      return;
+    }
 
-     final qrService = context.read<QrInviteService>();
-     
-     showDialog(
-       context: context,
-       builder: (context) => FutureBuilder<String>(
-         // Simulating a small delay to show the loading state as requested, 
-         // although QR generation is synchronous.
-         future: Future.delayed(const Duration(milliseconds: 500), 
-           () => qrService.generateInviteQrData(user.uid, 'family')
-         ),
-         builder: (context, snapshot) {
-           return AlertDialog(
-             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-             title: Text(
-               "Scan to Join",
-               textAlign: TextAlign.center,
-               style: GoogleFonts.inter(fontWeight: FontWeight.bold),
-             ),
-             content: Column(
-               mainAxisSize: MainAxisSize.min,
-               children: [
-                 Text(
-                   "Your family can scan this code to join your safety circle.",
-                   textAlign: TextAlign.center,
-                   style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600]),
-                 ),
-                 const SizedBox(height: 24),
-                 SizedBox(
-                   width: 200,
-                   height: 200,
-                   child: _buildQrContent(snapshot),
-                 ),
-                 const SizedBox(height: 24),
-                 TextButton(
-                   onPressed: () => Navigator.pop(context),
-                   child: Text(
-                     "Close",
-                     style: GoogleFonts.inter(
-                       fontWeight: FontWeight.bold,
-                       color: AppColors.primaryBlue
-                     ),
-                   ),
-                 ),
-               ],
-             ),
-           );
-         },
-       ),
-     );
+    final qrService = context.read<QrInviteService>();
+
+    showDialog(
+      context: context,
+      builder: (context) => FutureBuilder<String>(
+        // Simulating a small delay to show the loading state as requested,
+        // although QR generation is synchronous.
+        future: Future.delayed(
+          const Duration(milliseconds: 500),
+          () => qrService.generateInviteQrData(user.uid, 'family'),
+        ),
+        builder: (context, snapshot) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            title: Text(
+              "Scan to Join",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  "Your family can scan this code to join your safety circle.",
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: 200,
+                  height: 200,
+                  child: _buildQrContent(snapshot),
+                ),
+                const SizedBox(height: 24),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(
+                    "Close",
+                    style: GoogleFonts.inter(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryBlue,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 
   Widget _buildQrContent(AsyncSnapshot<String> snapshot) {
     if (snapshot.connectionState == ConnectionState.waiting) {
       return const Center(child: CircularProgressIndicator());
     }
-    
+
     if (snapshot.hasError) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline, color: AppColors.dangerRed, size: 40),
+            const Icon(
+              Icons.error_outline,
+              color: AppColors.dangerRed,
+              size: 40,
+            ),
             const SizedBox(height: 8),
             Text(
               "Failed to generate QR",
-              style: GoogleFonts.inter(fontSize: 12, color: AppColors.dangerRed),
-            ),          ],
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                color: AppColors.dangerRed,
+              ),
+            ),
+          ],
         ),
       );
     }
-    
+
     if (!snapshot.hasData || snapshot.data!.isEmpty) {
       return const Center(child: Text("No data"));
     }
@@ -1185,7 +1420,11 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                       shape: BoxShape.circle,
                       color: Colors.white.withValues(alpha: 0.2),
                     ),
-                    child: const Icon(Icons.person_add, color: Colors.white, size: 24),
+                    child: const Icon(
+                      Icons.person_add,
+                      color: Colors.white,
+                      size: 24,
+                    ),
                   ),
                   const SizedBox(width: 16),
                   Expanded(
@@ -1195,16 +1434,28 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                       children: [
                         Text(
                           'CONNECT FAMILY',
-                          style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white),
+                          style: GoogleFonts.inter(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
                         ),
                         Text(
                           'Add contacts to enable SOS',
-                          style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w500, color: Colors.white.withValues(alpha: 0.85)),
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.white.withValues(alpha: 0.85),
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  const Icon(Icons.arrow_forward_ios, color: Colors.white70, size: 16),
+                  const Icon(
+                    Icons.arrow_forward_ios,
+                    color: Colors.white70,
+                    size: 16,
+                  ),
                 ],
               ),
             ),
@@ -1248,7 +1499,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                           padding: EdgeInsets.all(10),
                           child: CircularProgressIndicator(
                             strokeWidth: 2.5,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
                           ),
                         )
                       : const Icon(
@@ -1319,23 +1572,251 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   late TabController _tabController;
   HomeAction _activeAction = HomeAction.none;
 
-  // Mock data - in a real app, this comes from a service
-  final String _seniorName = 'Annie';
-  final String _familyName = 'John';
-  final String _lastCheckIn = '22:13';
-  final String _coordinates = '30.1511, 71.4277';
-  final bool _isRecentlyActive = true;
+  // Senior Data State
+  SeniorStatusData? _seniorData;
+  bool _isLoadingSeniorData = true;
+  List<WellnessDataPoint> _weeklyWellnessData = [];
+  StreamSubscription? _seniorStateSubscription;
+  String _familyName = ''; // Empty until loaded
+  bool _isLoadingFamilyProfile = true; // Loading state for profile
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _loadSeniorData();
+    _loadFamilyProfile();
+  }
+
+  Future<void> _loadFamilyProfile() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      // OPTIMIZATION: Try to get name from Auth first (no Firestore read needed)
+      // This saves Firestore reads for Google/Apple sign-in users
+      String? nameFromAuth;
+      if (user.displayName != null && user.displayName!.isNotEmpty) {
+        nameFromAuth = user.displayName!.split(' ').first;
+      } else if (user.email != null && user.email!.isNotEmpty) {
+        nameFromAuth = user.email!.split('@').first;
+      }
+
+      // Set name immediately from Auth if available
+      if (nameFromAuth != null && nameFromAuth.isNotEmpty && mounted) {
+        setState(() {
+          _familyName = nameFromAuth!;
+          _isLoadingFamilyProfile = false;
+        });
+      }
+
+      try {
+        // Load profile for email/password users who set custom displayName in Firestore
+        final profile = await context.read<FirestoreService>().getUserProfile(
+          user.uid,
+        );
+        if (mounted) {
+          // For email/password users who set displayName in Firestore, use that instead
+          if (profile?.displayName != null &&
+              profile!.displayName!.isNotEmpty &&
+              (user.displayName == null || user.displayName!.isEmpty)) {
+            setState(() {
+              _familyName = profile.displayName!.split(' ').first;
+            });
+          }
+          setState(() => _isLoadingFamilyProfile = false);
+        }
+      } catch (e) {
+        debugPrint('Error loading family profile: $e');
+        // Name already set from Auth, just mark loading as complete
+        if (mounted) {
+          setState(() {
+            if (_familyName.isEmpty) {
+              _familyName =
+                  user.displayName?.split(' ').first ??
+                  user.email?.split('@').first ??
+                  'Family Member';
+            }
+            _isLoadingFamilyProfile = false;
+          });
+        }
+      }
+    } else {
+      if (mounted) setState(() => _isLoadingFamilyProfile = false);
+    }
   }
 
   @override
   void dispose() {
+    _seniorStateSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadSeniorData() async {
+    if (!mounted) return;
+    setState(() => _isLoadingSeniorData = true);
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (mounted) setState(() => _isLoadingSeniorData = false);
+      return;
+    }
+
+    try {
+      final firestoreService = context.read<FirestoreService>();
+      final connectionsStream = firestoreService.getConnectionsForFamily(
+        user.uid,
+      );
+      // We act on the first emission to set up listeners
+      // Add timeout to prevent indefinite hanging
+      final connections = await connectionsStream
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: (sink) {
+              debugPrint('Connection stream timed out, emitting empty list');
+              sink.add([]);
+              sink.close();
+            },
+          )
+          .first;
+
+      String? seniorId;
+
+      if (connections.isNotEmpty) {
+        // Use connections collection (preferred)
+        seniorId = connections.first.seniorId;
+        debugPrint('Found senior via connections: $seniorId');
+      } else {
+        // Fallback: check familyContacts for any with relationship='Senior'
+        debugPrint('No connections found, checking familyContacts...');
+
+        if (!mounted) return;
+
+        final contactsService = context.read<FamilyContactsService>();
+        final contacts = await contactsService.getContacts(user.uid).first;
+
+        // Look for contacts with relationship='Senior' and a valid contactUid
+        final seniorContacts = contacts
+            .where(
+              (c) =>
+                  c.relationship == 'Senior' &&
+                  c.contactUid != null &&
+                  c.contactUid!.isNotEmpty,
+            )
+            .toList();
+
+        if (seniorContacts.isNotEmpty) {
+          seniorId = seniorContacts.first.contactUid;
+          debugPrint('Found senior via familyContacts: $seniorId');
+        } else {
+          debugPrint('No seniors found in familyContacts either');
+        }
+      }
+
+      if (seniorId == null || seniorId.isEmpty) {
+        if (mounted) setState(() => _isLoadingSeniorData = false);
+        return;
+      }
+
+      if (!mounted) return;
+
+      // Get Senior Name
+      final seniorProfile = await firestoreService.getUserProfile(seniorId);
+      final srName = seniorProfile?.displayName ?? 'Senior';
+
+      if (!mounted) return;
+
+      // Load Weekly Data
+      final history = await firestoreService.getSeniorCheckInsForWeek(seniorId);
+      final weeklyData = history
+          .map((h) => WellnessDataPoint.fromCheckIn(h))
+          .toList();
+
+      if (mounted) {
+        setState(() {
+          _weeklyWellnessData = weeklyData;
+        });
+      }
+
+      if (!mounted) return;
+
+      // Stream State
+      _seniorStateSubscription?.cancel();
+      _seniorStateSubscription = firestoreService
+          .streamSeniorState(seniorId)
+          .listen((state) {
+            if (!mounted) return;
+            final status = _calculateSeniorStatus(
+              state,
+              state?.checkInSchedules ?? [],
+            );
+            setState(() {
+              _seniorData = SeniorStatusData(
+                status: status,
+                seniorName: srName,
+                lastCheckIn: state?.lastCheckIn,
+                timeString: state?.lastCheckIn != null
+                    ? DateFormat('HH:mm').format(state!.lastCheckIn!)
+                    : null,
+              );
+              _isLoadingSeniorData = false;
+            });
+          });
+    } catch (e) {
+      debugPrint('Error loading senior data: $e');
+      if (mounted) setState(() => _isLoadingSeniorData = false);
+    }
+  }
+
+  SeniorCheckInStatus _calculateSeniorStatus(
+    SeniorState? state,
+    List<String> schedules,
+  ) {
+    if (state == null) return SeniorCheckInStatus.pending;
+
+    // Check for same day check-in
+    if (state.lastCheckIn != null) {
+      final now = DateTime.now();
+      final last = state.lastCheckIn!;
+      if (last.year == now.year &&
+          last.month == now.month &&
+          last.day == now.day) {
+        return SeniorCheckInStatus.safe;
+      }
+    }
+
+    // Check if time passed
+    // Parse schedules (e.g. "11:00 AM") and compare with now
+    final now = DateTime.now();
+
+    // Default to 11:00 AM if no schedules configured
+    final effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
+
+    bool isLate = false;
+
+    for (final schedule in effectiveSchedules) {
+      // Simple parser assuming "HH:mm AM/PM" format
+      try {
+        // Create a dummy date with today + schedule time
+        // We can use DateFormat to parse "hh:mm a"
+        final time = DateFormat('hh:mm a').parse(schedule);
+        final scheduledTime = DateTime(
+          now.year,
+          now.month,
+          now.day,
+          time.hour,
+          time.minute,
+        );
+
+        if (now.isAfter(scheduledTime)) {
+          isLate = true;
+          break;
+        }
+      } catch (e) {
+        // Ignore parse errors
+        debugPrint('Error parsing schedule time: $schedule - $e');
+      }
+    }
+
+    return isLate ? SeniorCheckInStatus.alert : SeniorCheckInStatus.pending;
   }
 
   /// Unified role switching helper with loading state and error handling
@@ -1367,26 +1848,27 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       if (!mounted) return;
 
       // Step 3: Navigate only after both operations succeed
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => targetScreen),
-      );
+      Navigator.of(
+        context,
+      ).pushReplacement(MaterialPageRoute(builder: (_) => targetScreen));
     } catch (e, stackTrace) {
       debugPrint('Error switching to $targetRole: $e');
       debugPrint('Stack trace: $stackTrace');
-      
+
       if (mounted) {
         setState(() => _activeAction = HomeAction.none);
-        
+
         // Show contextual error message
         String errorMessage = 'Failed to switch roles.';
         if (e.toString().contains('permission')) {
           errorMessage = 'Permission denied. Please try again later.';
-        } else if (e.toString().contains('network') || e.toString().contains('connection')) {
+        } else if (e.toString().contains('network') ||
+            e.toString().contains('connection')) {
           errorMessage = 'Network error. Please check your connection.';
         } else if (e.toString().contains('unavailable')) {
           errorMessage = 'Service unavailable. Please try again later.';
         }
-        
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(errorMessage, style: GoogleFonts.inter()),
@@ -1408,12 +1890,16 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
 
   String _getGreeting() {
     final hour = DateTime.now().hour;
-    if (hour < 12) {
+    if (hour < 5) {
+      return 'GOOD NIGHT';
+    } else if (hour < 12) {
       return 'GOOD MORNING';
     } else if (hour < 17) {
       return 'GOOD AFTERNOON';
-    } else {
+    } else if (hour < 21) {
       return 'GOOD EVENING';
+    } else {
+      return 'GOOD NIGHT';
     }
   }
 
@@ -1512,51 +1998,60 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
 
           // Greeting Text
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Hi $_familyName!',
-                  style: GoogleFonts.inter(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: isDarkMode
-                        ? AppColors.textPrimaryDark
-                        : AppColors.textPrimary,
+            child: _isLoadingFamilyProfile
+                ? Row(
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: isDarkMode
+                              ? Colors.white70
+                              : AppColors.successGreen,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        'Loading...',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: isDarkMode
+                              ? AppColors.textSecondaryDark
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Hi $_familyName!',
+                        style: GoogleFonts.inter(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: isDarkMode
+                              ? AppColors.textPrimaryDark
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        _getGreeting(),
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.successGreen,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-                Text(
-                  _getGreeting(),
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.successGreen,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-              ],
-            ),
           ),
 
           // Action Icons
-          _buildHeaderIcon(
-            Icons.calendar_today_outlined,
-            isDarkMode,
-            isLoading: _activeAction == HomeAction.calendar,
-            onTap: () async {
-              setState(() => _activeAction = HomeAction.calendar);
-              await Future.delayed(const Duration(milliseconds: 300));
-              if (mounted) {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const CalendarScreen()),
-                );
-                if (mounted) {
-                  setState(() => _activeAction = HomeAction.none);
-                }
-              }
-            },
-          ),
+          // Calendar Removed per user request
           const SizedBox(width: 8),
           _buildHeaderIcon(
             Icons.settings_outlined,
@@ -1568,7 +2063,9 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               if (mounted) {
                 await Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                  MaterialPageRoute(
+                    builder: (context) => const SettingsScreen(),
+                  ),
                 );
                 if (mounted) {
                   setState(() => _activeAction = HomeAction.none);
@@ -1678,21 +2175,218 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     );
   }
 
+  // Invite Family Method
+  void _onInviteFamily() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "Invite Family Members",
+              style: GoogleFonts.inter(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              "Share your unique code so family can monitor your safety.",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 24),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFFE3F2FD),
+                child: Icon(Icons.share, color: AppColors.primaryBlue),
+              ),
+              title: const Text("Share Invite Code"),
+              onTap: () async {
+                final user = FirebaseAuth.instance.currentUser;
+                if (user != null) {
+                  final qrService = context.read<QrInviteService>();
+                  Navigator.pop(context); // Close sheet
+                  // Generate code (assuming senior inviting family? Or family inviting other family/senior?
+                  // Prompt says "Empty State Testing... Generate Invite QR/Code button".
+                  // If this is Family View, they are probably inviting a Senior to connect?
+                  // But QR Service logic depends on role.
+                  // Let's assume inviting a Senior.
+                  final code = qrService.generateInviteQrData(
+                    user.uid,
+                    'senior',
+                  ); // Invite senior?
+                  await SharePlus.instance.share(ShareParams(text: code));
+                } else {
+                  Navigator.pop(context);
+                }
+              },
+            ),
+            ListTile(
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFFE3F2FD),
+                child: Icon(Icons.qr_code, color: AppColors.primaryBlue),
+              ),
+              title: const Text("Show QR Code"),
+              onTap: () {
+                Navigator.pop(context);
+                _showQrDialog();
+              },
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showQrDialog() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    final qrService = context.read<QrInviteService>();
+    showDialog(
+      context: context,
+      builder: (context) => FutureBuilder<String>(
+        future: Future.value(
+          qrService.generateInviteQrData(user.uid, 'senior'),
+        ),
+        builder: (context, snapshot) {
+          // Handle error state
+          if (snapshot.hasError) {
+            return AlertDialog(
+              title: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: AppColors.dangerRed),
+                  const SizedBox(width: 8),
+                  Text(
+                    'QR Generation Failed',
+                    style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              content: Text(
+                'Unable to generate QR code. Please try again.',
+                style: GoogleFonts.inter(),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(
+                    'Close',
+                    style: GoogleFonts.inter(color: AppColors.primaryBlue),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _showQrDialog(); // Retry
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryBlue,
+                  ),
+                  child: Text(
+                    'Retry',
+                    style: GoogleFonts.inter(color: Colors.white),
+                  ),
+                ),
+              ],
+            );
+          }
+          
+          // Handle loading state
+          if (!snapshot.hasData) {
+            return AlertDialog(
+              content: SizedBox(
+                width: 200,
+                height: 200,
+                child: const Center(child: CircularProgressIndicator()),
+              ),
+            );
+          }
+          
+          // Validate data before rendering QR
+          final qrData = snapshot.data!;
+          if (qrData.isEmpty) {
+            return AlertDialog(
+              title: Text(
+                'Invalid QR Data',
+                style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+              ),
+              content: Text(
+                'QR code data is empty. Please try again.',
+                style: GoogleFonts.inter(),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(
+                    'Close',
+                    style: GoogleFonts.inter(color: AppColors.primaryBlue),
+                  ),
+                ),
+              ],
+            );
+          }
+          
+          // Render valid QR code
+          return AlertDialog(
+            content: SizedBox(
+              width: 200,
+              height: 200,
+              child: QrImageView(data: qrData),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   // ==================== STATUS TAB ====================
   Widget _buildStatusTab(bool isDarkMode) {
+    if (_isLoadingSeniorData) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_seniorData == null) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: _buildInviteCard(isDarkMode),
+      );
+    }
+
+    // Calculate streak from wellness data (count consecutive days with medication or checkins?)
+    // Prompt says "Track consecutive days where medication === 'Yes'"
+    int medStreak = 0;
+    // Iterate backwards
+    // Note: _weeklyWellnessData is unordered? Firestore query was descending.
+    // So list is Recent -> Old.
+    for (var point in _weeklyWellnessData) {
+      if (point.medicationTaken) {
+        medStreak++;
+      } else {
+        break;
+      }
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
         children: [
           const SizedBox(height: 8),
 
-          // Safe Status Badge
-          _buildSafeStatusBadge(isDarkMode),
+          // Dynamic Status Card
+          _buildDynamicStatusCard(_seniorData!, isDarkMode),
           const SizedBox(height: 32),
 
-          // Live Tracking Card
-          _buildLiveTrackingCard(isDarkMode),
-          const SizedBox(height: 16),
+          // Removed Live Tracking Card as it wasn't requested in update plan but kept structure mostly
+          // Replaced with Medication Streak Card or similar/Just Quick Stats
 
           // Quick Stats Row
           Row(
@@ -1700,103 +2394,226 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               Expanded(
                 child: _buildQuickStatCard(
                   'Check-ins',
-                  '47',
+                  _weeklyWellnessData.length.toString(), // Weekly count
                   Icons.check_circle_outline,
                   isDarkMode,
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: _buildQuickStatCard(
-                  'Streak',
-                  '7 days',
-                  Icons.local_fire_department,
-                  isDarkMode,
-                ),
+                child: _buildMedicationStreakCard(medStreak, 0, isDarkMode),
               ),
             ],
           ),
           const SizedBox(height: 16),
 
           // AI Care Intelligence Card
-          _buildAICareCard(isDarkMode),
+          _buildAICareCard(isDarkMode, medStreak),
         ],
       ),
     );
   }
 
-  Widget _buildSafeStatusBadge(bool isDarkMode) {
-    return Column(
-      children: [
-        // Green circle with checkmark
-        Container(
-          width: 100,
-          height: 100,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: RadialGradient(
-              colors: [
-                AppColors.successGreen,
-                AppColors.successGreen.withValues(alpha: 0.8),
-              ],
+  Widget _buildInviteCard(bool isDarkMode) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: AppColors.primaryBlue.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        children: [
+          Icon(Icons.person_add_alt_1, size: 60, color: AppColors.primaryBlue),
+          const SizedBox(height: 16),
+          Text(
+            'No Seniors Connected',
+            style: GoogleFonts.inter(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: isDarkMode ? Colors.white : Colors.black87,
             ),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.successGreen.withValues(alpha: 0.35),
-                blurRadius: 24,
-                spreadRadius: 4,
-              ),
-            ],
           ),
-          child: const Icon(Icons.check_circle, color: Colors.white, size: 52),
-        ),
-        const SizedBox(height: 24),
+          const SizedBox(height: 8),
+          Text(
+            'Invite a senior family member to start monitoring their wellness.',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(color: Colors.grey),
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton.icon(
+            onPressed: _onInviteFamily,
+            icon: const Icon(Icons.qr_code),
+            label: const Text('Generate Invite QR/Code'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryBlue,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-        // Status text
-        Text(
-          '$_seniorName is Safe',
-          style: GoogleFonts.inter(
-            fontSize: 28,
-            fontWeight: FontWeight.w800,
-            color: isDarkMode
-                ? AppColors.textPrimaryDark
-                : AppColors.textPrimary,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: AppColors.successGreen.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: AppColors.successGreen.withValues(alpha: 0.3),
+  Widget _buildDynamicStatusCard(SeniorStatusData data, bool isDarkMode) {
+    Color cardColor;
+    Color iconColor;
+    IconData icon;
+    String title;
+    String subtitle;
+    List<Widget> actions = [];
+
+    switch (data.status) {
+      case SeniorCheckInStatus.safe:
+        cardColor = AppColors.successGreen;
+        iconColor = Colors.white;
+        icon = Icons.check_circle;
+        title = '${data.seniorName} is Safe';
+        subtitle = data.timeString != null 
+            ? 'Last check-in at ${data.timeString}' 
+            : 'No recent check-in';
+        break;
+      case SeniorCheckInStatus.pending:
+        cardColor = const Color(0xFFFFBF00); // Amber
+        iconColor = Colors.white;
+        icon = Icons.access_time_filled;
+        title = 'Pending check-in';
+        subtitle = 'Waiting for update...';
+        break;
+      case SeniorCheckInStatus.alert:
+        cardColor = AppColors.dangerRed;
+        iconColor = Colors.white;
+        icon = Icons.warning_rounded;
+        title = 'Check-in time passed!';
+        subtitle = 'Please check on ${data.seniorName}';
+        actions = [
+          ElevatedButton.icon(
+            onPressed: () => _launchURL('tel:'), // In real app use number
+            icon: const Icon(Icons.call),
+            label: Text('Call ${data.seniorName}'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: AppColors.dangerRed,
             ),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.successGreen,
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Notifications to others sent (Placeholder)'),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Last check-in at $_lastCheckIn',
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.successGreen,
-                ),
-              ),
-            ],
+              );
+            },
+            icon: const Icon(Icons.notifications_active),
+            label: const Text('Notify Others'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: const BorderSide(color: Colors.white),
+            ),
           ),
+        ];
+        break;
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: cardColor.withValues(alpha: 0.3),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withValues(alpha: 0.2),
+            ),
+            child: Icon(icon, size: 48, color: iconColor),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              color: Colors.white.withValues(alpha: 0.9),
+            ),
+          ),
+          if (actions.isNotEmpty) ...[const SizedBox(height: 24), ...actions],
+        ],
+      ),
+    );
+  }
+
+  void _launchURL(String url) async {
+    // Placeholder for url launcher
+    debugPrint('Launching $url');
+  }
+
+  Widget _buildMedicationStreakCard(int streak, int missed, bool isDarkMode) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.backgroundDark : AppColors.inputFillLight,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
         ),
-      ],
+      ),
+      child: Column(
+        children: [
+          Icon(
+            Icons.local_fire_department,
+            color: const Color(0xFFFF6B35),
+            size: 28,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$streak Days',
+            style: GoogleFonts.inter(
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              color: isDarkMode
+                  ? AppColors.textPrimaryDark
+                  : AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Meds Streak',
+            style: GoogleFonts.inter(
+              fontSize: 11,
+              color: isDarkMode
+                  ? AppColors.textSecondaryDark
+                  : AppColors.textSecondary,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1844,114 +2661,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     );
   }
 
-  Widget _buildLiveTrackingCard(bool isDarkMode) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppColors.primaryBlue.withValues(alpha: 0.08),
-            AppColors.primaryBlue.withValues(alpha: 0.03),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.primaryBlue.withValues(alpha: 0.2)),
-      ),
-      child: Row(
-        children: [
-          // Location icon
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.primaryBlue,
-                  AppColors.primaryBlue.withValues(alpha: 0.8),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.primaryBlue.withValues(alpha: 0.3),
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: const Icon(Icons.location_on, color: Colors.white, size: 28),
-          ),
-          const SizedBox(width: 16),
-
-          // Text content
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'LIVE TRACKING',
-                  style: GoogleFonts.inter(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.primaryBlue,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  _isRecentlyActive ? 'Recently active' : 'Inactive',
-                  style: GoogleFonts.inter(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: _isRecentlyActive
-                        ? AppColors.successGreen
-                        : AppColors.textSecondary,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  _coordinates,
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: isDarkMode
-                        ? AppColors.textSecondaryDark
-                        : AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Pulse indicator
-          Container(
-            width: 14,
-            height: 14,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _isRecentlyActive
-                  ? AppColors.successGreen
-                  : AppColors.textSecondary,
-              boxShadow: _isRecentlyActive
-                  ? [
-                      BoxShadow(
-                        color: AppColors.successGreen.withValues(alpha: 0.5),
-                        blurRadius: 8,
-                        spreadRadius: 2,
-                      ),
-                    ]
-                  : null,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAICareCard(bool isDarkMode) {
+  Widget _buildAICareCard(bool isDarkMode, [int streak = 0]) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -2024,7 +2734,11 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'All vitals look great! Keep maintaining the daily routine.',
+                    streak >= 7
+                        ? 'Consistent medication adherence! Great job maintaining routine.'
+                        : (streak == 0
+                              ? 'Medication missed recently. Check in on them.'
+                              : 'Monitoring daily routine patterns.'),
                     style: GoogleFonts.inter(
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
@@ -2045,151 +2759,55 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
 
   // ==================== HEALTH TAB ====================
   Widget _buildHealthTab(bool isDarkMode) {
+    if (_isLoadingSeniorData) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_seniorData == null) return const Center(child: Text("No Data"));
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
         children: [
           const SizedBox(height: 8),
 
-          // Health Metrics Row
-          Row(
-            children: [
-              Expanded(
-                child: _buildHealthMetricCard(
-                  'Heart Rate',
-                  '72',
-                  'bpm',
-                  Icons.favorite,
-                  AppColors.dangerRed,
-                  isDarkMode,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildHealthMetricCard(
-                  'Steps',
-                  '8.2k',
-                  'today',
-                  Icons.directions_walk,
-                  AppColors.primaryBlue,
-                  isDarkMode,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
+          // Wellness Index Graph
+          _buildWellnessIndexGraph(_weeklyWellnessData, isDarkMode),
 
-          Row(
-            children: [
-              Expanded(
-                child: _buildHealthMetricCard(
-                  'Sleep',
-                  '7.5',
-                  'hours',
-                  Icons.bedtime,
-                  AppColors.successGreen,
-                  isDarkMode,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildHealthMetricCard(
-                  'Energy',
-                  'Good',
-                  'level',
-                  Icons.bolt,
-                  const Color(0xFFFFBF00),
-                  isDarkMode,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-
-          // Weekly Trends Chart
-          _buildWeeklyTrendsCard(isDarkMode),
           const SizedBox(height: 16),
-
-          // Cognitive Performance Card
+          // Cognitive Performance Card (Keep existing)
           _buildCognitivePerformanceCard(isDarkMode),
         ],
       ),
     );
   }
 
-  Widget _buildHealthMetricCard(
-    String label,
-    String value,
-    String unit,
-    IconData icon,
-    Color color,
+  Widget _buildWellnessIndexGraph(
+    List<WellnessDataPoint> data,
     bool isDarkMode,
   ) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDarkMode ? AppColors.backgroundDark : Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: color, size: 22),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            value,
-            style: GoogleFonts.inter(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              color: isDarkMode
-                  ? AppColors.textPrimaryDark
-                  : AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            unit,
-            style: GoogleFonts.inter(
-              fontSize: 11,
-              color: isDarkMode
-                  ? AppColors.textSecondaryDark
-                  : AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            label,
-            style: GoogleFonts.inter(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: isDarkMode
-                  ? AppColors.textSecondaryDark
-                  : AppColors.textSecondary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+    if (data.isEmpty) {
+      return _buildHealthPlaceholderCard(
+        isDarkMode: isDarkMode,
+        icon: Icons.show_chart,
+        title: 'No Wellness Data Yet',
+        subtitle: 'Wellness data will appear here once check-ins are recorded.',
+      );
+    }
 
-  Widget _buildWeeklyTrendsCard(bool isDarkMode) {
+    // Calculate spots
+    // Data is assumed descending (recent first). Reverse for graph (old -> new)
+    final sorted = List<WellnessDataPoint>.from(data.reversed);
+    final spots = <FlSpot>[];
+    for (int i = 0; i < sorted.length; i++) {
+      spots.add(FlSpot(i.toDouble(), sorted[i].wellnessIndex));
+    }
+
     return Container(
-      width: double.infinity,
+      height: 300,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: isDarkMode ? AppColors.backgroundDark : Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(
           color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
         ),
@@ -2198,64 +2816,91 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Weekly Trends',
+            'Wellness Index',
             style: GoogleFonts.inter(
               fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: isDarkMode
-                  ? AppColors.textPrimaryDark
-                  : AppColors.textPrimary,
+              fontWeight: FontWeight.bold,
+              color: isDarkMode ? Colors.white : Colors.black87,
             ),
           ),
-          const SizedBox(height: 20),
-
-          // Chart area with improved design
-          SizedBox(
-            height: 160,
-            child: CustomPaint(
-              size: const Size(double.infinity, 160),
-              painter: ModernHealthChartPainter(isDarkMode: isDarkMode),
+          const SizedBox(height: 24),
+          Expanded(
+            child: LineChart(
+              LineChartData(
+                gridData: FlGridData(show: false),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  topTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (val, meta) {
+                        int index = val.toInt();
+                        if (index >= 0 && index < sorted.length) {
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              DateFormat('E').format(sorted[index].date)[0],
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          );
+                        }
+                        return const SizedBox();
+                      },
+                    ),
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                minX: 0,
+                maxX: (sorted.length - 1).toDouble(),
+                minY: 0,
+                maxY: 1.1,
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: spots,
+                    isCurved: true,
+                    color: AppColors.primaryBlue,
+                    barWidth: 4,
+                    isStrokeCapRound: true,
+                    dotData: FlDotData(show: true),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      color: AppColors.primaryBlue.withValues(alpha: 0.2),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 20),
-
-          // Legend
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildChartLegendItem('Sleep Quality', AppColors.successGreen),
-              const SizedBox(width: 24),
-              _buildChartLegendItem('Energy Level', AppColors.primaryBlue),
-            ],
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildChartLegendItem(String label, Color color) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 12,
-          height: 12,
-          decoration: BoxDecoration(shape: BoxShape.circle, color: color),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          label,
-          style: GoogleFonts.inter(
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textSecondary,
-          ),
-        ),
-      ],
     );
   }
 
   Widget _buildCognitivePerformanceCard(bool isDarkMode) {
+    // TODO: Replace with actual cognitive data when available
+    // For now, show placeholder since we don't have real cognitive metrics
+    final hasData = false; // Will be replaced with actual data check
+    
+    if (!hasData) {
+      return _buildHealthPlaceholderCard(
+        isDarkMode: isDarkMode,
+        icon: Icons.psychology,
+        title: 'No Cognitive Data Yet',
+        subtitle: 'Play brain games to track cognitive performance over time.',
+      );
+    }
+    
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -2315,6 +2960,64 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                 color: AppColors.successGreen,
                 fontWeight: FontWeight.w600,
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  /// Builds a styled placeholder card for health data sections
+  Widget _buildHealthPlaceholderCard({
+    required bool isDarkMode,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: isDarkMode 
+              ? AppColors.borderDark 
+              : AppColors.primaryBlue.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              color: AppColors.primaryBlue.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              size: 32,
+              color: AppColors.primaryBlue,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            title,
+            style: GoogleFonts.inter(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: isDarkMode ? Colors.white : Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              color: isDarkMode 
+                  ? AppColors.textSecondaryDark 
+                  : Colors.grey,
             ),
           ),
         ],
@@ -2529,214 +3232,4 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       ),
     );
   }
-}
-
-// Modern Health Chart Painter with cleaner design
-class ModernHealthChartPainter extends CustomPainter {
-  final bool isDarkMode;
-
-  ModernHealthChartPainter({required this.isDarkMode});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Paint for grid lines
-    final gridPaint = Paint()
-      ..color = (isDarkMode ? AppColors.borderDark : AppColors.borderLight)
-          .withValues(alpha: 0.3)
-      ..strokeWidth = 1
-      ..style = PaintingStyle.stroke;
-
-    // Draw horizontal grid lines
-    for (int i = 0; i <= 4; i++) {
-      final y = size.height * (i / 4);
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-
-    // Paint for Sleep Quality line (green)
-    final sleepPaint = Paint()
-      ..color = AppColors.successGreen
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    // Paint for Energy Level line (blue)
-    final energyPaint = Paint()
-      ..color = AppColors.primaryBlue
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    // Sample data points (7 days)
-    final sleepData = [0.6, 0.8, 0.7, 0.9, 0.8, 0.75, 0.85];
-    final energyData = [0.7, 0.6, 0.8, 0.7, 0.9, 0.85, 0.8];
-
-    // Draw Sleep Quality curve
-    final sleepPath = Path();
-    for (int i = 0; i < sleepData.length; i++) {
-      final x = (size.width / (sleepData.length - 1)) * i;
-      final y = size.height - (size.height * sleepData[i]);
-      if (i == 0) {
-        sleepPath.moveTo(x, y);
-      } else {
-        sleepPath.lineTo(x, y);
-      }
-
-      // Draw data point circle
-      canvas.drawCircle(
-        Offset(x, y),
-        4,
-        Paint()
-          ..color = AppColors.successGreen
-          ..style = PaintingStyle.fill,
-      );
-    }
-    canvas.drawPath(sleepPath, sleepPaint);
-
-    // Draw Energy Level curve
-    final energyPath = Path();
-    for (int i = 0; i < energyData.length; i++) {
-      final x = (size.width / (energyData.length - 1)) * i;
-      final y = size.height - (size.height * energyData[i]);
-      if (i == 0) {
-        energyPath.moveTo(x, y);
-      } else {
-        energyPath.lineTo(x, y);
-      }
-
-      // Draw data point circle
-      canvas.drawCircle(
-        Offset(x, y),
-        4,
-        Paint()
-          ..color = AppColors.primaryBlue
-          ..style = PaintingStyle.fill,
-      );
-    }
-    canvas.drawPath(energyPath, energyPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-// Keep the old painter for reference (can be deleted later)
-class HealthChartPainter extends CustomPainter {
-  final bool isDarkMode;
-
-  HealthChartPainter({required this.isDarkMode});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final greenPaint = Paint()
-      ..color = AppColors.successGreen
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    final bluePaint = Paint()
-      ..color = AppColors.primaryBlue
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    // Draw green curve (sleep quality)
-    final greenPath = Path();
-    greenPath.moveTo(0, size.height * 0.5);
-    greenPath.cubicTo(
-      size.width * 0.2,
-      size.height * 0.6,
-      size.width * 0.4,
-      size.height * 0.2,
-      size.width * 0.5,
-      size.height * 0.4,
-    );
-    greenPath.cubicTo(
-      size.width * 0.6,
-      size.height * 0.6,
-      size.width * 0.8,
-      size.height * 0.8,
-      size.width,
-      size.height * 0.5,
-    );
-    canvas.drawPath(greenPath, greenPaint);
-
-    // Draw blue curve (energy level)
-    final bluePath = Path();
-    bluePath.moveTo(0, size.height * 0.4);
-    bluePath.cubicTo(
-      size.width * 0.15,
-      size.height * 0.3,
-      size.width * 0.3,
-      size.height * 0.1,
-      size.width * 0.45,
-      size.height * 0.15,
-    );
-    bluePath.cubicTo(
-      size.width * 0.55,
-      size.height * 0.2,
-      size.width * 0.65,
-      size.height * 0.5,
-      size.width * 0.75,
-      size.height * 0.4,
-    );
-    bluePath.cubicTo(
-      size.width * 0.85,
-      size.height * 0.3,
-      size.width * 0.95,
-      size.height * 0.4,
-      size.width,
-      size.height * 0.35,
-    );
-    canvas.drawPath(bluePath, bluePaint);
-
-    // Draw data tooltip box
-    final tooltipRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(size.width * 0.6, size.height * 0.3, 70, 60),
-      const Radius.circular(8),
-    );
-    final tooltipPaint = Paint()
-      ..color = isDarkMode ? AppColors.surfaceDark : Colors.white
-      ..style = PaintingStyle.fill;
-    final tooltipBorderPaint = Paint()
-      ..color = isDarkMode ? AppColors.borderDark : AppColors.borderLight
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-
-    canvas.drawRRect(tooltipRect, tooltipPaint);
-    canvas.drawRRect(tooltipRect, tooltipBorderPaint);
-
-    // Draw tooltip text
-    final textPainter = TextPainter(textDirection: TextDirection.ltr);
-
-    // Day number
-    textPainter.text = TextSpan(
-      text: '09',
-      style: GoogleFonts.inter(
-        fontSize: 14,
-        fontWeight: FontWeight.w700,
-        color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
-      ),
-    );
-    textPainter.layout();
-    textPainter.paint(canvas, Offset(size.width * 0.62, size.height * 0.34));
-
-    // Energy label
-    textPainter.text = TextSpan(
-      text: 'energy : 3',
-      style: GoogleFonts.inter(fontSize: 10, color: AppColors.successGreen),
-    );
-    textPainter.layout();
-    textPainter.paint(canvas, Offset(size.width * 0.62, size.height * 0.48));
-
-    // Sleep label
-    textPainter.text = TextSpan(
-      text: 'sleep : 3',
-      style: GoogleFonts.inter(fontSize: 10, color: AppColors.primaryBlue),
-    );
-    textPainter.layout();
-    textPainter.paint(canvas, Offset(size.width * 0.62, size.height * 0.58));
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

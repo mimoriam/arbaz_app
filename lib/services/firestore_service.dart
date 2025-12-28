@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
 import '../models/connection_model.dart';
@@ -126,6 +127,28 @@ class FirestoreService {
 
   Future<void> updateSeniorState(String uid, SeniorState state) async {
     await _seniorStateRef(uid).set(state.toFirestore(), SetOptions(merge: true));
+  }
+
+  /// Stream senior state for real-time updates (avoids polling)
+  Stream<SeniorState?> streamSeniorState(String seniorUid) {
+    if (seniorUid.isEmpty) return Stream.value(null);
+    
+    return _seniorStateRef(seniorUid)
+        .snapshots()
+        .map((snap) {
+          if (!snap.exists) return null;
+          return SeniorState.fromFirestore(snap);
+        })
+        .transform(
+          StreamTransformer<SeniorState?, SeniorState?>.fromHandlers(
+            handleError: (error, stackTrace, sink) {
+              // Log the error (using print since debugPrint requires flutter import)
+              print('Error streaming senior state: $error');
+              // Emit null to subscribers for graceful degradation
+              sink.add(null);
+            },
+          ),
+        );
   }
 
   Future<void> mergeCheckInSchedules(String uid, List<String> schedules) async {
@@ -262,6 +285,24 @@ class FirestoreService {
     return snapshot.docs
         .map((doc) => CheckInRecord.fromFirestore(doc))
         .toList();
+  }
+
+  /// Get check-ins for a senior for the past 7 days
+  /// Uses a single indexed query (requires composite index on userId + timestamp)
+  /// Returns empty list on error for graceful degradation
+  Future<List<CheckInRecord>> getSeniorCheckInsForWeek(String seniorUid) async {
+    if (seniorUid.isEmpty) return [];
+    try {
+      final weekAgo = DateTime.now().subtract(const Duration(days: 7));
+      final snapshot = await _checkInsRef(seniorUid)
+          .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(weekAgo))
+          .orderBy('timestamp', descending: true)
+          .get();
+      return snapshot.docs.map((d) => CheckInRecord.fromFirestore(d)).toList();
+    } catch (e) {
+      // debugPrint('Error fetching weekly check-ins: $e');
+      return []; // Graceful degradation
+    }
   }
   
   // ===== Progressive Profile =====
