@@ -18,7 +18,6 @@ import 'package:arbaz_app/services/contacts_service.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/services/qr_invite_service.dart';
 import 'package:arbaz_app/models/family_contact_model.dart';
-import 'package:arbaz_app/models/connection_model.dart';
 import 'package:arbaz_app/services/auth_gate.dart';
 import 'package:arbaz_app/services/location_service.dart';
 import 'package:geolocator/geolocator.dart';
@@ -1451,32 +1450,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
             }
 
             final firestoreService = context.read<FirestoreService>();
-            final contactsService = context.read<FamilyContactsService>();
 
             // Close bottom sheet first so snackbar is visible
             Navigator.pop(context);
 
             try {
-              // Create the connection in top-level connections collection
-              final connectionId = '${result.uid}_${user.uid}';
-              final connection = Connection(
-                id: connectionId,
-                seniorId: result.uid,
-                familyId: user.uid,
-                status: 'active',
-                createdAt: DateTime.now(),
-              );
-              await firestoreService.createConnection(connection);
+              // Fetch profiles first (before atomic write)
+              // Use Future.wait for parallel fetches
+              final profileFutures = await Future.wait([
+                firestoreService.getUserProfile(result.uid),
+                firestoreService.getUserProfile(user.uid),
+              ]);
+              final invitedUserProfile = profileFutures[0];
+              final currentUserProfile = profileFutures[1];
 
-              // Get both user profiles for bidirectional contact addition
-              final invitedUserProfile = await firestoreService.getUserProfile(
-                result.uid,
-              );
-              final currentUserProfile = await firestoreService.getUserProfile(
-                user.uid,
-              );
-
-              // Resolve invited user name safely
+              // Resolve invited user name with multiple fallbacks
+              // Priority: Firestore displayName > Auth (if available) > email prefix > placeholder
               String invitedUserName = 'Family Member';
               if (invitedUserProfile != null &&
                   invitedUserProfile.displayName != null &&
@@ -1484,11 +1473,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 invitedUserName = invitedUserProfile.displayName!;
               } else if (invitedUserProfile != null &&
                   invitedUserProfile.email.isNotEmpty) {
-                // Fallback to email prefix if no display name
                 invitedUserName = invitedUserProfile.email.split('@').first;
               }
 
-              // Resolve current user name safely
+              // Resolve current user name with multiple fallbacks
+              // Priority: Firestore displayName > Auth displayName > email prefix > placeholder
               String currentUserName = 'Family Member';
               if (currentUserProfile != null &&
                   currentUserProfile.displayName != null &&
@@ -1496,33 +1485,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 currentUserName = currentUserProfile.displayName!;
               } else if (user.displayName != null &&
                   user.displayName!.isNotEmpty) {
+                // Use Firebase Auth displayName as fallback
                 currentUserName = user.displayName!;
               } else if (user.email != null) {
                 currentUserName = user.email!.split('@').first;
               }
 
-              // Add invited user to current user's family contacts
-              await contactsService.addContact(
-                user.uid,
-                FamilyContactModel(
-                  id: result.uid,
-                  name: invitedUserName,
-                  phone: invitedUserProfile?.phoneNumber ?? '',
-                  relationship: result.role == 'senior' ? 'Senior' : 'Family',
-                  addedAt: DateTime.now(),
-                ),
-              );
-
-              // Also add current user to invited user's family contacts (bidirectional)
-              await contactsService.addContact(
-                result.uid,
-                FamilyContactModel(
-                  id: user.uid,
-                  name: currentUserName,
-                  phone: currentUserProfile?.phoneNumber ?? '',
-                  relationship: 'Family', // Current user is family to them
-                  addedAt: DateTime.now(),
-                ),
+              // Use atomic method that writes everything in a single batch
+              // This prevents half-connected states and ensures data consistency
+              await firestoreService.createFamilyConnectionAtomic(
+                currentUserId: user.uid,
+                invitedUserId: result.uid,
+                currentUserName: currentUserName,
+                invitedUserName: invitedUserName,
+                currentUserPhone: currentUserProfile?.phoneNumber ?? '',
+                invitedUserPhone: invitedUserProfile?.phoneNumber ?? '',
+                invitedUserRole: result.role == 'senior' ? 'Senior' : 'Family',
               );
 
               if (context.mounted) {
@@ -1553,6 +1531,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildContactEntry(bool isDarkMode, FamilyContactModel contact) {
+    final firestoreService = context.read<FirestoreService>();
+    
+    // If contactUid is available, use live profile lookup
+    // This fixes the "Family Member Family" bug by fetching fresh data
+    if (contact.contactUid != null && contact.contactUid!.isNotEmpty) {
+      return FutureBuilder(
+        future: firestoreService.getUserProfile(contact.contactUid!),
+        builder: (context, snapshot) {
+          // Determine display name: use live data if available, fall back to stored name
+          String displayName = contact.name;
+          String displayPhone = contact.phone;
+          
+          if (snapshot.hasData && snapshot.data != null) {
+            final profile = snapshot.data!;
+            // Use live profile name if available
+            if (profile.displayName != null && profile.displayName!.isNotEmpty) {
+              displayName = profile.displayName!;
+            } else if (profile.email.isNotEmpty) {
+              displayName = profile.email.split('@').first;
+            }
+            // Use live phone if available and stored phone is empty/placeholder
+            if (profile.phoneNumber != null && profile.phoneNumber!.isNotEmpty) {
+              displayPhone = profile.phoneNumber!;
+            }
+          }
+          
+          return _buildContactEntryContent(
+            isDarkMode: isDarkMode,
+            contact: contact,
+            displayName: displayName,
+            displayPhone: displayPhone,
+            isLoading: snapshot.connectionState == ConnectionState.waiting,
+          );
+        },
+      );
+    }
+    
+    // No contactUid - use stored name (for manually added contacts)
+    return _buildContactEntryContent(
+      isDarkMode: isDarkMode,
+      contact: contact,
+      displayName: contact.name,
+      displayPhone: contact.phone,
+      isLoading: false,
+    );
+  }
+  
+  /// Internal widget builder for contact entry content
+  Widget _buildContactEntryContent({
+    required bool isDarkMode,
+    required FamilyContactModel contact,
+    required String displayName,
+    required String displayPhone,
+    required bool isLoading,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Row(
@@ -1560,47 +1593,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
           CircleAvatar(
             radius: 16,
             backgroundColor: AppColors.primaryBlue.withValues(alpha: 0.1),
-            child: Text(
-              contact.name.isNotEmpty ? contact.name[0].toUpperCase() : '?',
-              style: GoogleFonts.inter(
-                fontWeight: FontWeight.bold,
-                color: AppColors.primaryBlue,
-              ),
-            ),
+            child: isLoading
+                ? const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text(
+                    displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                    style: GoogleFonts.inter(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryBlue,
+                    ),
+                  ),
           ),
           const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                contact.name,
-                style: GoogleFonts.inter(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: isDarkMode
-                      ? AppColors.textPrimaryDark
-                      : AppColors.textPrimary,
-                ),
-              ),
-              if (contact.phone.isNotEmpty)
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Text(
-                  contact.phone,
+                  displayName,
                   style: GoogleFonts.inter(
-                    fontSize: 13,
-                    color: isDarkMode ? Colors.white70 : Colors.black87,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: isDarkMode
+                        ? AppColors.textPrimaryDark
+                        : AppColors.textPrimary,
                   ),
+                  overflow: TextOverflow.ellipsis,
                 ),
-              if (contact.relationship.isNotEmpty)
-                Text(
-                  contact.relationship,
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    color: isDarkMode ? Colors.white60 : Colors.black54,
+                if (displayPhone.isNotEmpty)
+                  Text(
+                    displayPhone,
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      color: isDarkMode ? Colors.white70 : Colors.black87,
+                    ),
                   ),
-                ),
-            ],
+                if (contact.relationship.isNotEmpty)
+                  Text(
+                    contact.relationship,
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: isDarkMode ? Colors.white60 : Colors.black54,
+                    ),
+                  ),
+              ],
+            ),
           ),
-          const Spacer(),
           Builder(
             builder: (context) {
               return GestureDetector(
@@ -1617,7 +1658,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         style: GoogleFonts.inter(fontWeight: FontWeight.bold),
                       ),
                       content: Text(
-                        'Remove ${contact.name}? This cannot be undone.',
+                        'Remove $displayName? This cannot be undone.',
                         style: GoogleFonts.inter(),
                       ),
                       actions: [
@@ -1648,17 +1689,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (!context.mounted) return;
 
                   try {
-                    // Use new bidirectional delete
+                    // Use bidirectional delete with contactUid if available, otherwise use contact.id
+                    final targetUid = contact.contactUid ?? contact.id;
                     final firestoreService = context.read<FirestoreService>();
                     await firestoreService.deleteFamilyConnection(
                       user.uid,
-                      contact.id,
+                      targetUid,
                     );
 
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text("${contact.name} removed."),
+                          content: Text("$displayName removed."),
                           backgroundColor: AppColors.successGreen,
                         ),
                       );

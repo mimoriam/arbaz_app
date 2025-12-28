@@ -389,4 +389,79 @@ class FirestoreService {
       );
     });
   }
+
+  // ===== Atomic Connection Creation =====
+
+  /// Creates a family connection atomically using WriteBatch.
+  /// This ensures all operations succeed or fail together:
+  /// 1. Create the connection document
+  /// 2. Add contact to current user's familyContacts
+  /// 3. Add contact to invited user's familyContacts (bidirectional)
+  /// 
+  /// Uses contactUid for live profile lookups instead of denormalized names.
+  Future<void> createFamilyConnectionAtomic({
+    required String currentUserId,
+    required String invitedUserId,
+    required String currentUserName,
+    required String invitedUserName,
+    required String currentUserPhone,
+    required String invitedUserPhone,
+    required String invitedUserRole, // 'Senior' or 'Family'
+  }) async {
+    final batch = _db.batch();
+
+    // 1. Create connection document (seniorId is always the senior, familyId is family member)
+    // Determine senior vs family based on role
+    final String seniorId;
+    final String familyId;
+    if (invitedUserRole == 'Senior') {
+      seniorId = invitedUserId;
+      familyId = currentUserId;
+    } else {
+      seniorId = currentUserId;
+      familyId = invitedUserId;
+    }
+    
+    final connectionId = '${seniorId}_$familyId';
+    final connectionRef = _connectionsRef.doc(connectionId);
+    batch.set(connectionRef, {
+      'id': connectionId,
+      'seniorId': seniorId,
+      'familyId': familyId,
+      'status': 'active',
+      'createdAt': Timestamp.now(),
+    });
+
+    // 2. Add invited user to current user's contacts
+    // Use invited user's UID as the document ID for easy lookup
+    final currentUserContactRef = _db
+        .collection('users')
+        .doc(currentUserId)
+        .collection('familyContacts')
+        .doc(invitedUserId);
+    batch.set(currentUserContactRef, {
+      'name': invitedUserName,
+      'phone': invitedUserPhone,
+      'relationship': invitedUserRole,
+      'addedAt': Timestamp.now(),
+      'contactUid': invitedUserId, // Store UID for live profile lookups
+    });
+
+    // 3. Add current user to invited user's contacts (bidirectional)
+    final invitedUserContactRef = _db
+        .collection('users')
+        .doc(invitedUserId)
+        .collection('familyContacts')
+        .doc(currentUserId);
+    batch.set(invitedUserContactRef, {
+      'name': currentUserName,
+      'phone': currentUserPhone,
+      'relationship': 'Family', // Current user is always 'Family' to them
+      'addedAt': Timestamp.now(),
+      'contactUid': currentUserId, // Store UID for live profile lookups
+    });
+
+    // Execute all operations atomically
+    await batch.commit();
+  }
 }

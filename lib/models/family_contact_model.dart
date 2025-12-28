@@ -6,6 +6,9 @@ class FamilyContactModel {
   final String phone;
   final String relationship;
   final DateTime addedAt;
+  /// UID of the connected user - used for live profile lookups
+  /// If set, the UI should fetch the live profile instead of using 'name'
+  final String? contactUid;
 
   FamilyContactModel({
     required this.id,
@@ -13,6 +16,7 @@ class FamilyContactModel {
     required this.phone,
     required this.relationship,
     required this.addedAt,
+    this.contactUid,
   });
 
   factory FamilyContactModel.fromFirestore(DocumentSnapshot doc) {
@@ -26,15 +30,20 @@ class FamilyContactModel {
       phone: data['phone'] ?? '',
       relationship: data['relationship'] ?? '',
       addedAt: (data['addedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      contactUid: data['contactUid'] as String?,
     );
   }
   Map<String, dynamic> toFirestore() {
-    return {
+    final data = <String, dynamic>{
       'name': name,
       'phone': phone,
       'relationship': relationship,
       'addedAt': Timestamp.fromDate(addedAt),
     };
+    if (contactUid != null) {
+      data['contactUid'] = contactUid;
+    }
+    return data;
   }
 
   FamilyContactModel copyWith({
@@ -43,6 +52,7 @@ class FamilyContactModel {
     String? phone,
     String? relationship,
     DateTime? addedAt,
+    String? contactUid,
   }) {
     return FamilyContactModel(
       id: id ?? this.id,
@@ -50,6 +60,7 @@ class FamilyContactModel {
       phone: phone ?? this.phone,
       relationship: relationship ?? this.relationship,
       addedAt: addedAt ?? this.addedAt,
+      contactUid: contactUid ?? this.contactUid,
     );
   }
 }

@@ -1,13 +1,17 @@
 import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
-import 'dart:async'; // Added for StreamSubscription
+import 'dart:async';
 
 class BrainGamesProvider extends ChangeNotifier {
   late FirestoreService _firestoreService;
   bool _isEnabled = false;
   bool _isLoading = true;
-  bool _isUpdating = false;
+  
+  /// Mutex-like lock for setEnabled operations
+  Completer<void>? _updateLock;
+  /// Track which user's state is loaded
+  String? _loadedUserId;
 
   StreamSubscription<User?>? _authSubscription;
 
@@ -21,35 +25,36 @@ class BrainGamesProvider extends ChangeNotifier {
   @override
   void dispose() {
     _authSubscription?.cancel();
+    _authSubscription = null;
     super.dispose();
   }
 
   Future<void> init() async {
-    // Cancel any existing subscription to be safe
+    // Cancel any existing subscription to prevent memory leaks
     await _authSubscription?.cancel();
+    _authSubscription = null;
 
     _authSubscription = FirebaseAuth.instance.authStateChanges().listen((user) async {
       if (user != null) {
-        _isLoading = true;
-        notifyListeners();
-        await _loadState(user.uid);
+        // Only reload if different user
+        if (_loadedUserId != user.uid) {
+          _isLoading = true;
+          notifyListeners();
+          await _loadState(user.uid);
+        }
       } else {
-        // User logged out
+        // User logged out - reset state
         _isEnabled = false;
         _isLoading = false;
+        _loadedUserId = null;
         notifyListeners();
       }
     });
     
-    // Handle initial state immediately just in case stream doesn't fire right away or we need synchronous-like check
+    // Handle initial state
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-       // Just trigger load, the stream will also handle updates but redundantly checking here ensures 
-       // we don't wait for the first stream event if it's already available.
-       // However, to avoid race conditions with the stream, we can rely on the stream 
-       // OR just do a check here. Using the stream is more robust for changes.
-       // If we want immediate data fetch without waiting for stream event:
-       await _loadState(user.uid);
+      await _loadState(user.uid);
     } else {
       _isLoading = false;
       notifyListeners();
@@ -61,7 +66,11 @@ class BrainGamesProvider extends ChangeNotifier {
       final seniorState = await _firestoreService.getSeniorState(uid);
       if (seniorState != null) {
         _isEnabled = seniorState.brainGamesEnabled;
+      } else {
+        // Default to true for new users
+        _isEnabled = true;
       }
+      _loadedUserId = uid;
     } catch (e) {
       debugPrint('Error loading brain games state: $e');
     } finally {
@@ -70,17 +79,23 @@ class BrainGamesProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> setEnabled(bool enabled) async {
-    if (_isUpdating) return; // Simple concurrency guard
+  /// Sets the enabled state with proper concurrency protection.
+  /// Uses a mutex-like pattern to prevent concurrent updates from corrupting state.
+  Future<bool> setEnabled(bool enabled) async {
+    // Wait for any in-progress update to complete
+    if (_updateLock != null) {
+      await _updateLock!.future;
+    }
     
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) return false;
 
     final previousEnabled = _isEnabled;
-    if (previousEnabled == enabled) return;
+    if (previousEnabled == enabled) return true; // No change needed
 
-    _isUpdating = true;
-    
+    // Acquire lock
+    _updateLock = Completer<void>();
+
     // Optimistic update
     _isEnabled = enabled;
     notifyListeners();
@@ -92,13 +107,17 @@ class BrainGamesProvider extends ChangeNotifier {
         'brainGamesEnabled',
         enabled,
       );
+      return true;
     } catch (e) {
       // Unconditionally revert on failure
       _isEnabled = previousEnabled;
       notifyListeners();
       debugPrint('Error updating brain games state: $e');
+      return false;
     } finally {
-      _isUpdating = false;
+      // Release lock
+      _updateLock?.complete();
+      _updateLock = null;
     }
   }
 }

@@ -1,6 +1,40 @@
+import 'dart:async';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
-import 'package:flutter/foundation.dart'; // Keep for debugPrint
+import 'package:flutter/foundation.dart';
+
+/// Types of location errors for differentiated error handling
+enum LocationErrorType {
+  permissionDenied,
+  permissionDeniedForever,
+  serviceDisabled,
+  timeout,
+  unknown,
+}
+
+/// Result of a location fetch operation
+class LocationResult {
+  final Position? position;
+  final LocationErrorType? errorType;
+  final String? errorMessage;
+  
+  bool get isSuccess => position != null;
+  bool get isError => errorType != null;
+  
+  const LocationResult._({
+    this.position,
+    this.errorType,
+    this.errorMessage,
+  });
+  
+  factory LocationResult.success(Position position) {
+    return LocationResult._(position: position);
+  }
+  
+  factory LocationResult.error(LocationErrorType type, {String? message}) {
+    return LocationResult._(errorType: type, errorMessage: message);
+  }
+}
 
 /// Service to handle location permissions and retrieval
 class LocationService {
@@ -18,38 +52,58 @@ class LocationService {
   ///
   /// [isEmergency] - If true, uses best accuracy (high battery usage).
   /// If false, uses medium accuracy (battery optimized) for regular check-ins.
-  Future<Position?> getCurrentLocation({bool isEmergency = false}) async {
+  /// 
+  /// Returns a [LocationResult] containing either the position or error details.
+  Future<LocationResult> getCurrentLocationWithDetails({bool isEmergency = false}) async {
     try {
       final permission = await checkPermission();
 
       if (permission == LocationPermission.denied) {
-        // Optionally request permission here, or just return null
         debugPrint('Location permission denied');
-        return null;
+        return LocationResult.error(LocationErrorType.permissionDenied);
       }
 
-      if (permission == LocationPermission.deniedForever ||
-          permission == LocationPermission.unableToDetermine) {
-        debugPrint('Location permission denied forever or unable to determine');
-        return null;
+      if (permission == LocationPermission.deniedForever) {
+        debugPrint('Location permission denied forever');
+        return LocationResult.error(LocationErrorType.permissionDeniedForever);
       }
+      
+      if (permission == LocationPermission.unableToDetermine) {
+        debugPrint('Location permission unable to determine');
+        return LocationResult.error(LocationErrorType.unknown);
+      }
+
       // Check if location services are enabled
       final isServiceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!isServiceEnabled) {
         debugPrint('Location services are disabled');
-        return null;
+        return LocationResult.error(LocationErrorType.serviceDisabled);
       }
 
-      return await Geolocator.getCurrentPosition(
+      final position = await Geolocator.getCurrentPosition(
         locationSettings: LocationSettings(
           accuracy: isEmergency ? LocationAccuracy.best : LocationAccuracy.medium,
           timeLimit: const Duration(seconds: 15),
         ),
       );
+      
+      return LocationResult.success(position);
+    } on TimeoutException {
+      debugPrint('Location request timed out');
+      return LocationResult.error(LocationErrorType.timeout);
+    } on LocationServiceDisabledException {
+      debugPrint('Location service disabled exception');
+      return LocationResult.error(LocationErrorType.serviceDisabled);
     } catch (e) {
       debugPrint('Error getting location: $e');
-      return null;
+      return LocationResult.error(LocationErrorType.unknown, message: e.toString());
     }
+  }
+
+  /// Legacy method that returns Position? for backward compatibility
+  Future<Position?> getCurrentLocation({bool isEmergency = false}) async {
+    final result = await getCurrentLocationWithDetails(isEmergency: isEmergency);
+    return result.position;
   }
 
   /// Gets the address from a Position
