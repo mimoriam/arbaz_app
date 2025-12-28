@@ -98,7 +98,7 @@ class _MemoryMatchScreenState extends State<MemoryMatchScreen>
 
   // Game state
   List<MemoryCard> _cards = [];
-  List<int> _flippedIndices = [];
+  final List<int> _flippedIndices = [];
   bool _canFlip = true;
   bool _gameStarted = false;
   bool _gameEnded = false;

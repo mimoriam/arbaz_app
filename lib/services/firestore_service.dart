@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
 import '../models/connection_model.dart';
+import '../models/checkin_model.dart';
 
 /// Firestore operations with subcollection structure
 class FirestoreService {
@@ -19,6 +20,9 @@ class FirestoreService {
 
   DocumentReference _familyStateRef(String uid) =>
       _db.collection('users').doc(uid).collection('data').doc('familyState');
+      
+  CollectionReference _checkInsRef(String uid) =>
+      _db.collection('users').doc(uid).collection('checkIns');
 
   CollectionReference _requestsRef(String uid) =>
       _db.collection('users').doc(uid).collection('requests');
@@ -38,17 +42,25 @@ class FirestoreService {
   }
 
   /// Updates the lastLoginAt timestamp for an existing profile.
-  /// Throws if the profile document does not exist (fail-fast behavior).
-  /// Use createUserProfile() first if the profile doesn't exist.
   Future<void> updateLastLogin(String uid) async {
     await _profileRef(uid).update({
       'lastLoginAt': Timestamp.now(),
     });
   }
+  
+  /// Updates user location in profile
+  Future<void> updateUserLocation(String uid, double latitude, double longitude, String? address) async {
+    final Map<String, dynamic> updates = {
+      'latitude': latitude,
+      'longitude': longitude,
+    };
+    if (address != null) {
+      updates['locationAddress'] = address;
+    }
+    await _profileRef(uid).update(updates);
+  }
 
   /// Updates specific fields on an existing user profile.
-  /// Throws if the profile document does not exist (fail-fast behavior).
-  /// Use createUserProfile() first if the profile doesn't exist.
   Future<void> updateUserProfile(
     String uid,
     Map<String, dynamic> updates,
@@ -73,7 +85,6 @@ class FirestoreService {
     if (isSenior != null) updates['isSenior'] = isSenior;
     if (isFamilyMember != null) updates['isFamilyMember'] = isFamilyMember;
 
-    // Early return if no updates
     if (updates.isEmpty) return;
 
     await _rolesRef(uid).set(updates, SetOptions(merge: true));
@@ -99,6 +110,34 @@ class FirestoreService {
     await _seniorStateRef(uid).set(state.toFirestore(), SetOptions(merge: true));
   }
 
+  Future<void> mergeCheckInSchedules(String uid, List<String> schedules) async {
+    await _seniorStateRef(uid).set({
+      'checkInSchedules': schedules,
+    }, SetOptions(merge: true));
+  }
+
+  /// Atomically adds a schedule time using FieldValue.arrayUnion
+  Future<void> atomicAddSchedule(String uid, String time) async {
+    await _seniorStateRef(uid).set({
+      'checkInSchedules': FieldValue.arrayUnion([time]),
+    }, SetOptions(merge: true));
+  }
+
+  /// Atomically removes a schedule time using FieldValue.arrayRemove
+  Future<void> atomicRemoveSchedule(String uid, String time) async {
+    await _seniorStateRef(uid).update({
+      'checkInSchedules': FieldValue.arrayRemove([time]),
+    });
+  }
+
+  /// Atomically updates a single field in SeniorState using merge
+  /// Avoids read-modify-write race conditions
+  Future<void> atomicUpdateSeniorField(String uid, String field, dynamic value) async {
+    await _seniorStateRef(uid).set({
+      field: value,
+    }, SetOptions(merge: true));
+  }
+
   Future<FamilyState?> getFamilyState(String uid) async {
     final doc = await _familyStateRef(uid).get();
     if (!doc.exists) return null;
@@ -108,22 +147,109 @@ class FirestoreService {
   Future<void> updateFamilyState(String uid, FamilyState state) async {
     await _familyStateRef(uid).set(state.toFirestore(), SetOptions(merge: true));
   }
-
+  
+  // ===== Check-in Operations =====
+  
+  /// Records a check-in atomically using a transaction to prevent race conditions
+  Future<void> recordCheckIn(String uid, CheckInRecord record) async {
+    final seniorStateRef = _seniorStateRef(uid);
+    final profileRef = _profileRef(uid);
+    
+    await _db.runTransaction((transaction) async {
+      // 1. Read senior state within transaction
+      final seniorStateDoc = await transaction.get(seniorStateRef);
+      
+      int newStreak = 1;
+      DateTime startDate = DateTime.now();
+      
+      if (seniorStateDoc.exists) {
+        final rawData = seniorStateDoc.data();
+        if (rawData != null && rawData is Map<String, dynamic>) {
+          final data = rawData;
+          // Get current streak
+          final currentStreak = (data['currentStreak'] as num?)?.toInt() ?? 0;
+          
+          // Get stored start date
+          if (data['startDate'] is Timestamp) {
+            startDate = (data['startDate'] as Timestamp).toDate();
+          }
+          
+          // Get last check-in
+          final lastCheckInTimestamp = data['lastCheckIn'] as Timestamp?;
+          if (lastCheckInTimestamp != null) {
+            final lastCheckIn = lastCheckInTimestamp.toDate();
+            final now = DateTime.now();
+            final today = DateTime(now.year, now.month, now.day);
+            final lastCheckInDay = DateTime(lastCheckIn.year, lastCheckIn.month, lastCheckIn.day);
+            
+            final daysDifference = today.difference(lastCheckInDay).inDays;
+            
+            if (daysDifference == 0) {
+              // Same day check-in, keep current streak
+              newStreak = currentStreak > 0 ? currentStreak : 1;
+            } else if (daysDifference == 1) {
+              // Consecutive day, increment streak
+              newStreak = currentStreak + 1;
+            } else {
+              // Streak broken, reset to 1 and update startDate to current check-in
+              newStreak = 1;
+              startDate = record.timestamp;
+            }
+          }
+        }
+      }
+      
+      // 2. Create check-in document with auto-id
+      final checkInDocRef = _checkInsRef(uid).doc();
+      transaction.set(checkInDocRef, record.toFirestore());
+      
+      // 3. Update senior state with streak info
+      transaction.set(seniorStateRef, {
+        'lastCheckIn': Timestamp.fromDate(record.timestamp),
+        'currentStreak': newStreak,
+        'startDate': Timestamp.fromDate(startDate),
+      }, SetOptions(merge: true));
+      
+      // 4. If location info is present, update user profile location
+      if (record.latitude != null && record.longitude != null) {
+        final Map<String, dynamic> locationUpdates = {
+          'latitude': record.latitude,
+          'longitude': record.longitude,
+        };
+        if (record.locationAddress != null) {
+          locationUpdates['locationAddress'] = record.locationAddress;
+        }
+        transaction.set(profileRef, locationUpdates, SetOptions(merge: true));
+      }
+    });
+  }
+  
+  Future<List<CheckInRecord>> getCheckInsForMonth(String uid, int year, int month) async {
+    final start = DateTime(year, month, 1);
+    // Handle December case for end date
+    final endYear = month == 12 ? year + 1 : year;
+    final endMonth = month == 12 ? 1 : month + 1;
+    final end = DateTime(endYear, endMonth, 1);
+    
+    final snapshot = await _checkInsRef(uid)
+        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .where('timestamp', isLessThan: Timestamp.fromDate(end))
+        .orderBy('timestamp', descending: true)
+        .get();
+        
+    return snapshot.docs
+        .map((doc) => CheckInRecord.fromFirestore(doc))
+        .toList();
+  }
+  
   // ===== Progressive Profile =====
 
-  /// Updates phone number on an existing profile.
-  /// Throws if the profile document does not exist (fail-fast behavior).
-  /// Use createUserProfile() first if the profile doesn't exist.
   Future<void> updatePhoneNumber(String uid, String phoneNumber) async {
     await _profileRef(uid).update({
       'phoneNumber': phoneNumber,
     });
   }
 
-  /// Updates emergency contact in senior state.
-  /// Uses merge semantics - will create the seniorState document if it doesn't
-  /// exist (progressive profile collection). This is intentional for gradual
-  /// profile building after initial registration.
   Future<void> updateEmergencyContact(
     String uid,
     EmergencyContact contact,
@@ -210,7 +336,6 @@ class FirestoreService {
 
   // ===== Transaction-based operations =====
 
-  /// Create user with profile and default roles in a transaction
   Future<void> createUserWithRoles(
     String uid,
     UserProfile profile,
@@ -219,6 +344,49 @@ class FirestoreService {
     await _db.runTransaction((transaction) async {
       transaction.set(_profileRef(uid), profile.toFirestore());
       transaction.set(_rolesRef(uid), roles.toFirestore());
+    });
+  }
+
+  // ===== Deletion Operations =====
+
+  Future<void> deleteFamilyConnection(String currentUid, String contactUid) async {
+    // 1. Define possible connection IDs
+    final possibleId1 = '${currentUid}_$contactUid';
+    final possibleId2 = '${contactUid}_$currentUid';
+
+    // 2. Run transaction for both read and delete operations
+    await _db.runTransaction((transaction) async {
+      DocumentReference? connectionRefToDelete;
+
+      // Check existence of first possible ID
+      final docRef1 = _connectionsRef.doc(possibleId1);
+      final docSnapshot1 = await transaction.get(docRef1);
+
+      if (docSnapshot1.exists) {
+        connectionRefToDelete = docRef1;
+      } else {
+        // If first doesn't exist, check the second
+        final docRef2 = _connectionsRef.doc(possibleId2);
+        final docSnapshot2 = await transaction.get(docRef2);
+        if (docSnapshot2.exists) {
+          connectionRefToDelete = docRef2;
+        }
+      }
+
+      // If a connection document was found, delete it
+      if (connectionRefToDelete != null) {
+        transaction.delete(connectionRefToDelete);
+      }
+
+      // Remove from current user's contacts
+      transaction.delete(
+          _db.collection('users').doc(currentUid).collection('familyContacts').doc(contactUid)
+      );
+
+      // Remove from the other user's contacts
+      transaction.delete(
+          _db.collection('users').doc(contactUid).collection('familyContacts').doc(currentUid)
+      );
     });
   }
 }

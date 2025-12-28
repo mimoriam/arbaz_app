@@ -11,6 +11,13 @@ import 'package:flutter/services.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:arbaz_app/services/quotes_service.dart';
+import 'package:arbaz_app/services/location_service.dart';
+import 'package:arbaz_app/services/contacts_service.dart';
+import 'package:arbaz_app/models/family_contact_model.dart';
+import 'package:arbaz_app/services/qr_invite_service.dart'; // For invite
+import 'package:share_plus/share_plus.dart'; // For sharing invites
+import 'package:qr_flutter/qr_flutter.dart';
 
 /// Represents the different status states for the senior user
 enum SafetyStatus {
@@ -32,13 +39,14 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   bool _isSendingHelp = false;
   bool _hasCheckedInToday = false;
   bool _isSwitchingRole = false;
-  int _currentStreak =
-      46; // Mock streak - in real app, this comes from a service
+  int _currentStreak = 0; // Dynamic streak - loaded from Firestore
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
-  // User info - in a real app, this would come from a user service
-  final String _userName = 'Annie';
+  // User info
+  String _userName = '';
+  String? _lastCheckInLocation;
+  String? _todayQuote;
 
   @override
   void initState() {
@@ -51,6 +59,97 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     _pulseAnimation = Tween<double>(begin: 1.0, end: 1.08).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+    
+    // Initialize data after the widget is fully inserted in the tree
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initData();
+    });
+  }
+
+  Future<void> _initData() async {
+    try {
+      await _loadUserData();
+    } catch (e) {
+      debugPrint('Error loading user data: $e');
+    }
+
+    try {
+      await _checkLocationPermission();
+    } catch (e) {
+      debugPrint('Error checking location permission: $e');
+    }
+  }
+
+  Future<void> _loadUserData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      final firestoreService = context.read<FirestoreService>();
+      final quotesService = context.read<DailyQuotesService>();
+      
+      // Load Profile for Name
+      final profile = await firestoreService.getUserProfile(user.uid);
+      if (mounted) {
+        String nameToUse = '';
+        if (profile?.displayName != null && profile!.displayName!.isNotEmpty) {
+          nameToUse = profile.displayName!.split(' ').first;
+        } else if (user.displayName != null && user.displayName!.isNotEmpty) {
+          // Fallback to Firebase Auth displayName (e.g., from Google Sign-In)
+          nameToUse = user.displayName!.split(' ').first;
+        }
+        setState(() {
+          _userName = nameToUse;
+        });
+      }
+
+      // Load Senior State for Check-in status
+      final seniorState = await firestoreService.getSeniorState(user.uid);
+      if (mounted && seniorState != null) {
+        final lastCheckIn = seniorState.lastCheckIn;
+        if (lastCheckIn != null) {
+          final now = DateTime.now();
+          final isToday = lastCheckIn.year == now.year && 
+                          lastCheckIn.month == now.month && 
+                          lastCheckIn.day == now.day;
+          
+          setState(() {
+            _hasCheckedInToday = isToday;
+            _currentStreak = seniorState.currentStreak;
+            if (isToday) {
+               _currentStatus = SafetyStatus.safe;
+               _pulseController.stop();
+            }
+          });
+        } else {
+          setState(() {
+            _currentStreak = seniorState.currentStreak;
+          });
+        }
+        
+        // Populate last check-in location from profile (stored during check-in)
+        if (profile?.locationAddress != null) {
+          setState(() {
+            _lastCheckInLocation = profile!.locationAddress;
+          });
+        }
+      }
+      
+      // Cache daily quote
+      final quote = quotesService.getQuoteForToday(user.uid, DateTime.now());
+      if (mounted) {
+        setState(() => _todayQuote = quote);
+      }
+      
+    }
+  }
+
+  /// Check location permission status (no auto-request)
+  Future<void> _checkLocationPermission() async {
+    if (!mounted) return;
+    final locationService = context.read<LocationService>();
+    final permission = await locationService.checkPermission();
+    
+    // Just log the status - don't auto-request to respect user choice
+    debugPrint('Location permission status: $permission');
   }
 
   @override
@@ -129,12 +228,16 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
 
   String _getGreeting() {
     final hour = DateTime.now().hour;
-    if (hour < 12) {
+    if (hour < 5) {
+      return 'GOOD NIGHT';
+    } else if (hour < 12) {
       return 'GOOD MORNING';
     } else if (hour < 17) {
       return 'GOOD AFTERNOON';
-    } else {
+    } else if (hour < 21) {
       return 'GOOD EVENING';
+    } else {
+      return 'GOOD NIGHT';
     }
   }
 
@@ -296,8 +399,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                   ),
                 ),
 
-                // Emergency SOS Bar
-                _buildEmergencyBar(),
+                // Emergency SOS Bar (Smart)
+                _buildSmartEmergencyBar(),
               ],
             ),
           ),
@@ -352,7 +455,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Hi $_userName!',
+                      _userName.isNotEmpty ? 'Hi $_userName!' : 'Welcome!',
                       style: GoogleFonts.inter(
                         fontSize: 22,
                         fontWeight: FontWeight.w800,
@@ -588,9 +691,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       ringColor = const Color(0xFF7EC8FF); // Ring color
       statusIcon = Icons.check;
       statusText = "I'M SAFE";
-      subtitleText = "Tap to tell family I'm okay";
-      isClickable = false; // Not clickable after completion
-    } else if (_currentStatus == SafetyStatus.ok) {
+      subtitleText = "You've checked in for today";
+      isClickable = false; // Not clickable after completion    } else if (_currentStatus == SafetyStatus.ok) {
       // Yellow state - running late
       primaryColor = const Color(0xFFFFBF00); // Golden yellow
       secondaryColor = const Color(0xFFE5A800); // Darker yellow
@@ -726,13 +828,24 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   }
 
   Widget _buildHealthMessageSection(bool isDarkMode) {
-    final bool isSafe = _currentStatus == SafetyStatus.safe;
-    final Color dotColor = isSafe
-        ? AppColors.successGreen
-        : AppColors.warningOrange;
-    final String message = isSafe
-        ? 'All set for today!'
-        : 'Running late for 10:00';
+    // Determine message and state
+    String message;
+    Color dotColor;
+    String? subMessage;
+
+    if (_hasCheckedInToday) {
+      dotColor = AppColors.successGreen;
+      // Use cached daily quote
+      message = _todayQuote ?? "Have a wonderful day!";
+      
+      if (_lastCheckInLocation != null) {
+        subMessage = "Checked in from $_lastCheckInLocation";
+      }
+    } else {
+      dotColor = AppColors.warningOrange;
+      message = "You haven't checked in yet today";
+      subMessage = "Please take a moment to let us know you're okay.";
+    }
 
     return Column(
       children: [
@@ -753,7 +866,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
         // Message Card
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
           decoration: BoxDecoration(
             color: isDarkMode ? AppColors.surfaceDark : Colors.white,
             borderRadius: BorderRadius.circular(28),
@@ -770,37 +883,63 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                     ),
                   ],
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          child: Column(
             children: [
-              // Status Dot
-              Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: dotColor,
-                  boxShadow: [
-                    BoxShadow(
-                      color: dotColor.withValues(alpha: 0.4),
-                      blurRadius: 6,
-                      spreadRadius: 1,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Quote Icon or Status Dot
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: dotColor,
+                      boxShadow: [
+                        BoxShadow(
+                          color: dotColor.withValues(alpha: 0.4),
+                          blurRadius: 6,
+                          spreadRadius: 1,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
+                  ),
+                  const SizedBox(width: 16),
 
-              // Message Text
-              Text(
-                message,
-                style: GoogleFonts.inter(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: isDarkMode
-                      ? AppColors.textPrimaryDark
-                      : AppColors.textPrimary,
-                ),
+                  // Message Text
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          message,
+                          style: GoogleFonts.inter(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            color: isDarkMode
+                                ? AppColors.textPrimaryDark
+                                : AppColors.textPrimary,
+                            height: 1.4,
+                            fontStyle: _hasCheckedInToday ? FontStyle.italic : FontStyle.normal,
+                          ),
+                        ),
+                        if (subMessage != null) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            subMessage,
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              color: isDarkMode 
+                                  ? AppColors.textSecondaryDark 
+                                  : AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -809,95 +948,314 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     );
   }
 
-  Widget _buildEmergencyBar() {
-    final Color barColor = _isSendingHelp
-        ? AppColors.dangerRed
-        : const Color(0xFFFF6B35); // Orange-red for emergency
+  void _onInviteFamily() {
+     // Show invite options
+     showModalBottomSheet(
+       context: context,
+       backgroundColor: Colors.transparent,
+       builder: (context) => Container(
+         padding: const EdgeInsets.all(24),
+         decoration: const BoxDecoration(
+           color: Colors.white,
+           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+         ),
+         child: Column(
+           mainAxisSize: MainAxisSize.min,
+           children: [
+             Text(
+               "Invite Family Members",
+               style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.bold),
+             ),
+             const SizedBox(height: 16),
+             Text(
+               "Share your unique code so family can monitor your safety.",
+               textAlign: TextAlign.center,
+               style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600]),
+             ),
+             const SizedBox(height: 24),
+             ListTile(
+               leading: const CircleAvatar(backgroundColor: Color(0xFFE3F2FD), child: Icon(Icons.share, color: AppColors.primaryBlue)),
+               title: const Text("Share Invite Code"),
+               onTap: () async {
+                  final user = FirebaseAuth.instance.currentUser;
+                  if (user != null) {
+                    final qrService = context.read<QrInviteService>();
+                    Navigator.pop(context); // Close sheet
+                    // Generate code for family role
+                    final code = qrService.generateInviteQrData(user.uid, 'family');
+                    await SharePlus.instance.share(ShareParams(text: code));
+                  } else {
+                    Navigator.pop(context);
+                  }
+               },             ),
+             ListTile(
+               leading: const CircleAvatar(backgroundColor: Color(0xFFE3F2FD), child: Icon(Icons.qr_code, color: AppColors.primaryBlue)),
+               title: const Text("Show QR Code"),
+               onTap: () {
+                 Navigator.pop(context);
+                 _showQrDialog();
+               },
+             ),
+             const SizedBox(height: 16),
+           ],
+         ),
+       ),
+     );
+  }
 
-    return GestureDetector(
-      onTap: _isSendingHelp ? null : _onEmergencyTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        margin: const EdgeInsets.all(16),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-        decoration: BoxDecoration(
-          color: barColor,
-          borderRadius: BorderRadius.circular(28),
-          boxShadow: [
-            BoxShadow(
-              color: barColor.withValues(alpha: 0.4),
-              blurRadius: 16,
-              offset: const Offset(0, 6),
-            ),
-          ],
-        ),
-        child: Row(
+  void _showQrDialog() {
+     final user = FirebaseAuth.instance.currentUser;
+     if (user == null) {
+       ScaffoldMessenger.of(context).showSnackBar(
+         const SnackBar(content: Text("User session not found. Please log in again."))
+       );
+       return;
+     }
+
+     final qrService = context.read<QrInviteService>();
+     
+     showDialog(
+       context: context,
+       builder: (context) => FutureBuilder<String>(
+         // Simulating a small delay to show the loading state as requested, 
+         // although QR generation is synchronous.
+         future: Future.delayed(const Duration(milliseconds: 500), 
+           () => qrService.generateInviteQrData(user.uid, 'family')
+         ),
+         builder: (context, snapshot) {
+           return AlertDialog(
+             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+             title: Text(
+               "Scan to Join",
+               textAlign: TextAlign.center,
+               style: GoogleFonts.inter(fontWeight: FontWeight.bold),
+             ),
+             content: Column(
+               mainAxisSize: MainAxisSize.min,
+               children: [
+                 Text(
+                   "Your family can scan this code to join your safety circle.",
+                   textAlign: TextAlign.center,
+                   style: GoogleFonts.inter(fontSize: 14, color: Colors.grey[600]),
+                 ),
+                 const SizedBox(height: 24),
+                 SizedBox(
+                   width: 200,
+                   height: 200,
+                   child: _buildQrContent(snapshot),
+                 ),
+                 const SizedBox(height: 24),
+                 TextButton(
+                   onPressed: () => Navigator.pop(context),
+                   child: Text(
+                     "Close",
+                     style: GoogleFonts.inter(
+                       fontWeight: FontWeight.bold,
+                       color: AppColors.primaryBlue
+                     ),
+                   ),
+                 ),
+               ],
+             ),
+           );
+         },
+       ),
+     );
+  }
+
+  Widget _buildQrContent(AsyncSnapshot<String> snapshot) {
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    
+    if (snapshot.hasError) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            // SOS Icon
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.2),
-              ),
-              child: _isSendingHelp
-                  ? const Padding(
-                      padding: EdgeInsets.all(10),
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : const Icon(
-                      Icons.sos_outlined,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-            ),
-            const SizedBox(width: 16),
+            const Icon(Icons.error_outline, color: AppColors.dangerRed, size: 40),
+            const SizedBox(height: 8),
+            Text(
+              "Failed to generate QR",
+              style: GoogleFonts.inter(fontSize: 12, color: AppColors.dangerRed),
+            ),          ],
+        ),
+      );
+    }
+    
+    if (!snapshot.hasData || snapshot.data!.isEmpty) {
+      return const Center(child: Text("No data"));
+    }
 
-            // Text Content
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    _isSendingHelp ? 'SENDING HELP...' : 'EMERGENCY SOS',
-                    style: GoogleFonts.inter(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _isSendingHelp
-                        ? 'FAMILY WILL BE ALERTED NOW'
-                        : 'NOTIFY FAMILY IMMEDIATELY',
-                    style: GoogleFonts.inter(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.white.withValues(alpha: 0.85),
-                      letterSpacing: 0.3,
-                    ),
+    return QrImageView(
+      data: snapshot.data!,
+      version: QrVersions.auto,
+      size: 200.0,
+      eyeStyle: const QrEyeStyle(
+        eyeShape: QrEyeShape.square,
+        color: AppColors.primaryBlue,
+      ),
+      dataModuleStyle: const QrDataModuleStyle(
+        dataModuleShape: QrDataModuleShape.square,
+        color: AppColors.primaryBlue,
+      ),
+    );
+  }
+
+  Widget _buildSmartEmergencyBar() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return const SizedBox.shrink();
+
+    return StreamBuilder<List<FamilyContactModel>>(
+      stream: context.read<FamilyContactsService>().getContacts(user.uid),
+      builder: (context, snapshot) {
+        final contacts = snapshot.data ?? [];
+        final hasContacts = contacts.isNotEmpty;
+
+        // If no contacts, show "Invite Family" instead of SOS
+        if (!hasContacts) {
+          return GestureDetector(
+            onTap: _onInviteFamily,
+            child: Container(
+              margin: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+              decoration: BoxDecoration(
+                color: AppColors.primaryBlue,
+                borderRadius: BorderRadius.circular(28),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.primaryBlue.withValues(alpha: 0.3),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
                   ),
                 ],
               ),
-            ),
-
-            // Arrow indicator (only when not sending)
-            if (!_isSendingHelp)
-              Icon(
-                Icons.arrow_forward_ios,
-                color: Colors.white.withValues(alpha: 0.7),
-                size: 16,
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.2),
+                    ),
+                    child: const Icon(Icons.person_add, color: Colors.white, size: 24),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'CONNECT FAMILY',
+                          style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white),
+                        ),
+                        Text(
+                          'Add contacts to enable SOS',
+                          style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w500, color: Colors.white.withValues(alpha: 0.85)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.arrow_forward_ios, color: Colors.white70, size: 16),
+                ],
               ),
-          ],
-        ),
-      ),
+            ),
+          );
+        }
+
+        // Standard SOS Bar
+        final Color barColor = _isSendingHelp
+            ? AppColors.dangerRed
+            : const Color(0xFFFF6B35); // Orange-red for emergency
+
+        return GestureDetector(
+          onTap: _isSendingHelp ? null : _onEmergencyTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            margin: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+            decoration: BoxDecoration(
+              color: barColor,
+              borderRadius: BorderRadius.circular(28),
+              boxShadow: [
+                BoxShadow(
+                  color: barColor.withValues(alpha: 0.4),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                // SOS Icon
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: 0.2),
+                  ),
+                  child: _isSendingHelp
+                      ? const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        )
+                      : const Icon(
+                          Icons.sos_outlined,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                ),
+                const SizedBox(width: 16),
+
+                // Text Content
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _isSendingHelp ? 'SENDING HELP...' : 'EMERGENCY SOS',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _isSendingHelp
+                            ? 'FAMILY WILL BE ALERTED NOW'
+                            : 'NOTIFY FAMILY IMMEDIATELY',
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white.withValues(alpha: 0.85),
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Arrow indicator (only when not sending)
+                if (!_isSendingHelp)
+                  Icon(
+                    Icons.arrow_forward_ios,
+                    color: Colors.white.withValues(alpha: 0.7),
+                    size: 16,
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

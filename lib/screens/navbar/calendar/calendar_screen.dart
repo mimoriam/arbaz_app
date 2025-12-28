@@ -1,25 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:arbaz_app/services/firestore_service.dart';
+import 'package:arbaz_app/models/checkin_model.dart';
 
 /// Represents a check-in entry with details about the day
-class CheckInData {
-  final int day;
-  final String time;
-  final bool hadIssues;
-  final List<String> issues;
-  final String? notes;
-  final String mood;
-
-  const CheckInData({
-    required this.day,
-    required this.time,
-    this.hadIssues = false,
-    this.issues = const [],
-    this.notes,
-    this.mood = 'good',
-  });
-}
 
 class CalendarScreen extends StatefulWidget {
   const CalendarScreen({super.key});
@@ -30,57 +18,20 @@ class CalendarScreen extends StatefulWidget {
 
 class _CalendarScreenState extends State<CalendarScreen>
     with SingleTickerProviderStateMixin {
+  // Lowercase for case-insensitive comparison
+  static const _negativeMoods = {'awful', 'bad', 'sad', 'down', 'very_sad'};
+  static const _poorSleepQualities = {'poor', 'fair', 'poorly'};
+
   late DateTime _currentMonth;
   late DateTime _selectedDate;
   late AnimationController _animationController;
 
-  // Mock data for days with detailed check-ins
-  final Map<int, CheckInData> _checkInData = {
-    1: const CheckInData(day: 1, time: '08:30', mood: 'great'),
-    2: const CheckInData(day: 2, time: '09:15', mood: 'good'),
-    3: const CheckInData(
-      day: 3,
-      time: '07:45',
-      hadIssues: true,
-      issues: ['Strong cravings'],
-      notes: 'Had difficulty in the morning but pushed through',
-      mood: 'challenging',
-    ),
-    5: const CheckInData(day: 5, time: '10:00', mood: 'great'),
-    8: const CheckInData(
-      day: 8,
-      time: '08:00',
-      hadIssues: true,
-      issues: ['Mood swings', 'Irritability'],
-      notes: 'Stressful day at work triggered some issues',
-      mood: 'difficult',
-    ),
-    9: const CheckInData(day: 9, time: '08:45', mood: 'good'),
-    10: const CheckInData(day: 10, time: '09:00', mood: 'great'),
-    11: const CheckInData(
-      day: 11,
-      time: '07:30',
-      hadIssues: true,
-      issues: ['Sleep issues'],
-      mood: 'tired',
-    ),
-    12: const CheckInData(day: 12, time: '08:15', mood: 'good'),
-    15: const CheckInData(day: 15, time: '09:30', mood: 'great'),
-    18: const CheckInData(
-      day: 18,
-      time: '08:00',
-      hadIssues: true,
-      issues: ['Cravings', 'Anxiety'],
-      notes: 'Social event was challenging',
-      mood: 'challenging',
-    ),
-    22: const CheckInData(day: 22, time: '08:30', mood: 'good'),
-    23: const CheckInData(day: 23, time: '09:00', mood: 'great'),
-    24: const CheckInData(day: 24, time: '08:45', mood: 'good'),
-    25: const CheckInData(day: 25, time: '08:00', mood: 'great'),
-  };
+  bool _isLoading = true;
+  DateTime? _userStartDate;
+  int _currentStreak = 0;
 
-  Set<int> get _daysWithCheckIns => _checkInData.keys.toSet();
+  // Derived map for easy lookup by day
+  Map<int, List<CheckInRecord>> _checkInsByDay = {};
 
   @override
   void initState() {
@@ -93,6 +44,60 @@ class _CalendarScreenState extends State<CalendarScreen>
       duration: const Duration(milliseconds: 300),
     );
     _animationController.forward();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _fetchMonthlyData();
+    });
+  }
+
+  Future<void> _fetchMonthlyData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (mounted) setState(() => _isLoading = false);
+      return;
+    }
+
+    if (!_isLoading) {
+      if (mounted) setState(() => _isLoading = true);
+    }
+    try {
+      if (!mounted) return;
+      final firestoreService = Provider.of<FirestoreService>(
+        context,
+        listen: false,
+      );
+
+      // Load senior state to get startDate and streak
+      final seniorState = await firestoreService.getSeniorState(user.uid);
+
+      final checkIns = await firestoreService.getCheckInsForMonth(
+        user.uid,
+        _currentMonth.year,
+        _currentMonth.month,
+      );
+      if (!mounted) return;
+
+      setState(() {
+        _userStartDate = seniorState?.startDate;
+        _currentStreak = seniorState?.currentStreak ?? 0;
+
+        // Group by day
+        _checkInsByDay = {};
+        for (var record in checkIns) {
+          final day = record.timestamp.day;
+          if (!_checkInsByDay.containsKey(day)) {
+            _checkInsByDay[day] = [];
+          }
+          _checkInsByDay[day]!.add(record);
+        }
+        _isLoading = false;
+      });
+    } catch (e) {
+      debugPrint('Error fetching calendar data: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   @override
@@ -101,16 +106,30 @@ class _CalendarScreenState extends State<CalendarScreen>
     super.dispose();
   }
 
+  /// Checks if a check-in record has issues (negative mood or poor sleep)
+  bool _hasIssuesForRecord(CheckInRecord record) {
+    final moodIdx = record.mood?.toLowerCase();
+    final sleepIdx = record.sleep?.toLowerCase();
+    return (moodIdx != null && _negativeMoods.contains(moodIdx)) ||
+        (sleepIdx != null && _poorSleepQualities.contains(sleepIdx));
+  }
+
   void _goToPreviousMonth() {
     setState(() {
       _currentMonth = DateTime(_currentMonth.year, _currentMonth.month - 1, 1);
+      // Reset selected date to first day of new month
+      _selectedDate = _currentMonth;
     });
+    _fetchMonthlyData();
   }
 
   void _goToNextMonth() {
     setState(() {
       _currentMonth = DateTime(_currentMonth.year, _currentMonth.month + 1, 1);
+      // Reset selected date to first day of new month
+      _selectedDate = _currentMonth;
     });
+    _fetchMonthlyData();
   }
 
   void _selectDate(DateTime date) {
@@ -304,6 +323,41 @@ class _CalendarScreenState extends State<CalendarScreen>
   }
 
   Widget _buildStreakCard(bool isDarkMode) {
+    // Calculate success rate based on user's start date, not full month
+    final today = DateTime.now();
+    final monthStart = DateTime(_currentMonth.year, _currentMonth.month, 1);
+    final monthEnd =
+        (_currentMonth.year == today.year && _currentMonth.month == today.month)
+        ? today
+        : DateTime(_currentMonth.year, _currentMonth.month + 1, 0);
+
+    // Determine the effective start for this month
+    DateTime effectiveStart = monthStart;
+    if (_userStartDate != null && _userStartDate!.isAfter(monthStart)) {
+      effectiveStart = _userStartDate!;
+    }
+
+    // If the user started after this month ended, show 0% (or handle appropriately)
+    int daysToCount = 0;
+    if (!effectiveStart.isAfter(monthEnd)) {
+      daysToCount = monthEnd.difference(effectiveStart).inDays + 1;
+    }
+
+    // Filter checkInsByDay keys to only count days >= effectiveStart
+    final effectiveStartDay =
+        effectiveStart.year == _currentMonth.year &&
+            effectiveStart.month == _currentMonth.month
+        ? effectiveStart.day
+        : 1;
+
+    final checkInDays = _checkInsByDay.keys
+        .where((day) => day >= effectiveStartDay)
+        .length;
+
+    final successRate = daysToCount > 0
+        ? ((checkInDays / daysToCount) * 100).toInt().clamp(0, 100)
+        : 0;
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -328,13 +382,13 @@ class _CalendarScreenState extends State<CalendarScreen>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          _buildStreakStat('🔥', '${_daysWithCheckIns.length}', 'Streak'),
+          _buildStreakStat('🔥', '$_currentStreak', 'Streak'),
           Container(
             width: 1,
             height: 28,
             color: Colors.white.withValues(alpha: 0.3),
           ),
-          _buildStreakStat('✅', '${_daysWithCheckIns.length}', 'Check-ins'),
+          _buildStreakStat('✅', '$checkInDays', 'Check-ins'),
           Container(
             width: 1,
             height: 28,
@@ -342,8 +396,8 @@ class _CalendarScreenState extends State<CalendarScreen>
           ),
           _buildStreakStat(
             '📊',
-            '${((_daysWithCheckIns.length / DateTime.now().day) * 100).toInt()}%',
-            'Success',
+            '$successRate%', // Display calculated percentage
+            'Success Rate',
           ),
         ],
       ),
@@ -554,6 +608,10 @@ class _CalendarScreenState extends State<CalendarScreen>
             (availableHeight - ((rows - 1) * 4)) / rows; // gaps of 4px
         final cellSize = cellWidth < cellHeight ? cellWidth : cellHeight;
 
+        if (_isLoading) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
         return GridView.builder(
           physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -579,9 +637,20 @@ class _CalendarScreenState extends State<CalendarScreen>
                 _selectedDate.year == _currentMonth.year &&
                 _selectedDate.month == _currentMonth.month &&
                 _selectedDate.day == dayNumber;
-            final hasCheckIn = _daysWithCheckIns.contains(dayNumber);
-            final checkInData = _checkInData[dayNumber];
-            final hasIssues = checkInData?.hadIssues ?? false;
+
+            final dayRecords = _checkInsByDay[dayNumber];
+            final hasCheckIn = dayRecords != null && dayRecords.isNotEmpty;
+
+            // Determine if there were any issues in the day's records
+            bool hasIssues = false;
+            if (hasCheckIn) {
+              for (var record in dayRecords) {
+                if (_hasIssuesForRecord(record)) {
+                  hasIssues = true;
+                  break;
+                }
+              }
+            }
 
             return _buildDayCell(
               day: dayNumber,
@@ -811,8 +880,25 @@ class _CalendarScreenState extends State<CalendarScreen>
   }
 
   void _showDateDetails() {
-    final hasCheckIn = _daysWithCheckIns.contains(_selectedDate.day);
-    final checkInData = _checkInData[_selectedDate.day];
+    // Validate that selected date is in the current month
+    final lookupDate =
+        (_selectedDate.year == _currentMonth.year &&
+            _selectedDate.month == _currentMonth.month)
+        ? _selectedDate
+        : _currentMonth; // Fallback to first day of month
+
+    final dayRecords = _checkInsByDay[lookupDate.day];
+    final hasCheckIn = dayRecords != null && dayRecords.isNotEmpty;
+    
+    CheckInRecord? latestRecord;
+    if (hasCheckIn) {
+      // Create a sorted copy to avoid modifying the original list in place if it's cached/used elsewhere
+      final sortedRecords = List<CheckInRecord>.from(dayRecords);
+      // Sort by timestamp ascending
+      sortedRecords.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      latestRecord = sortedRecords.last;
+    }
+
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
     showModalBottomSheet(
@@ -870,7 +956,15 @@ class _CalendarScreenState extends State<CalendarScreen>
             // Date title
             Center(
               child: Text(
-                '${_getMonthName(_selectedDate.month)} ${_selectedDate.day}, ${_selectedDate.year}',
+                /*Use lookupDate instead of _selectedDate for display consistency.
+                The lookupDate variable was created to handle the case where _selectedDate might not be in the
+                current month. However, the displayed date still uses _selectedDate, 
+                which could show an inconsistent date relative to the data being displayed.
+             Center(
+               child: Text(
+-                DateFormat('MMMM d, y').format(_selectedDate),
++                DateFormat('MMMM d, y').format(lookupDate), */
+                DateFormat('MMMM d, y').format(_selectedDate),
                 style: GoogleFonts.inter(
                   fontSize: 20,
                   fontWeight: FontWeight.w800,
@@ -884,10 +978,10 @@ class _CalendarScreenState extends State<CalendarScreen>
             const SizedBox(height: 20),
 
             // Main Status Card
-            _buildStatusCard(hasCheckIn, checkInData, isDarkMode),
+            _buildStatusCard(hasCheckIn, latestRecord, isDarkMode),
 
             // Show details if check-in exists
-            if (hasCheckIn && checkInData != null) ...[
+            if (hasCheckIn && latestRecord != null) ...[
               const SizedBox(height: 16),
 
               // Check-in Time & Mood Row
@@ -896,150 +990,78 @@ class _CalendarScreenState extends State<CalendarScreen>
                   Expanded(
                     child: _buildInfoChip(
                       icon: Icons.access_time_rounded,
-                      label: 'Check-in at ${checkInData.time}',
+                      label: DateFormat(
+                        'h:mm a',
+                      ).format(latestRecord.timestamp),
                       isDarkMode: isDarkMode,
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildInfoChip(
-                      icon: Icons.mood,
-                      label: 'Mood: ${checkInData.mood}',
-                      isDarkMode: isDarkMode,
+                  if (latestRecord.mood != null)
+                    Expanded(
+                      child: _buildInfoChip(
+                        icon: Icons.mood,
+                        label: 'Mood: ${latestRecord.mood}',
+                        isDarkMode: isDarkMode,
+                      ),
                     ),
-                  ),
                 ],
               ),
 
+              if (latestRecord.locationAddress != null) ...[
+                const SizedBox(height: 12),
+                _buildInfoChip(
+                  icon: Icons.location_on_outlined,
+                  label: latestRecord.locationAddress!,
+                  isDarkMode: isDarkMode,
+                ),
+              ],
+
               const SizedBox(height: 16),
 
-              // Issues Section or All Good
-              if (checkInData.hadIssues && checkInData.issues.isNotEmpty) ...[
-                Text(
-                  'Challenges Faced',
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: isDarkMode
-                        ? AppColors.textSecondaryDark
-                        : AppColors.textSecondary,
-                  ),
+              // Simple Stats for the day
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: isDarkMode
+                      ? AppColors.backgroundDark
+                      : AppColors.inputFillLight,
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: checkInData.issues.map((issue) {
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
+                child: Column(
+                  children: [
+                    if (latestRecord.sleep != null)
+                      _buildSimpleRow(
+                        'Sleep Quality',
+                        latestRecord.sleep!,
+                        isDarkMode,
                       ),
-                      decoration: BoxDecoration(
-                        color: AppColors.warningOrange.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: AppColors.warningOrange.withValues(alpha: 0.3),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _getIssueIcon(issue),
-                            color: AppColors.warningOrange,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            issue,
-                            style: GoogleFonts.inter(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.warningOrange,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ] else ...[
-                // All Good Card
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        AppColors.successGreen.withValues(alpha: 0.1),
-                        AppColors.successGreen.withValues(alpha: 0.05),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: AppColors.successGreen.withValues(alpha: 0.2),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(
-                        Icons.celebration_rounded,
-                        color: AppColors.successGreen,
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'All Good! No issues reported',
-                        style: GoogleFonts.inter(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.successGreen,
-                        ),
+                    if (latestRecord.energy != null) ...[
+                      const SizedBox(height: 8),
+                      _buildSimpleRow(
+                        'Energy Level',
+                        latestRecord.energy!,
+                        isDarkMode,
                       ),
                     ],
-                  ),
+                    if (latestRecord.medication != null) ...[
+                      const SizedBox(height: 8),
+                      _buildSimpleRow(
+                        'Medication',
+                        latestRecord.medication == 'yes'
+                            ? 'Taken'
+                            : latestRecord.medication == 'not_yet'
+                            ? 'Not yet'
+                            : latestRecord.medication == 'skipped'
+                            ? 'Skipped'
+                            : latestRecord.medication!,
+                        isDarkMode,
+                      ),
+                    ],
+                  ],
                 ),
-              ],
-
-              // Notes section
-              if (checkInData.notes != null &&
-                  checkInData.notes!.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Text(
-                  'Notes',
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: isDarkMode
-                        ? AppColors.textSecondaryDark
-                        : AppColors.textSecondary,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: isDarkMode
-                        ? AppColors.backgroundDark
-                        : AppColors.inputFillLight,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    checkInData.notes!,
-                    style: GoogleFonts.inter(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: isDarkMode
-                          ? AppColors.textPrimaryDark
-                          : AppColors.textPrimary,
-                      height: 1.4,
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ],
 
             const SizedBox(height: 24),
@@ -1049,12 +1071,42 @@ class _CalendarScreenState extends State<CalendarScreen>
     );
   }
 
+  Widget _buildSimpleRow(String label, String value, bool isDarkMode) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.inter(
+            color: isDarkMode
+                ? AppColors.textSecondaryDark
+                : AppColors.textSecondary,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        Text(
+          value,
+          style: GoogleFonts.inter(
+            color: isDarkMode
+                ? AppColors.textPrimaryDark
+                : AppColors.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildStatusCard(
     bool hasCheckIn,
-    CheckInData? checkInData,
+    CheckInRecord? record,
     bool isDarkMode,
   ) {
-    final hasIssues = checkInData?.hadIssues ?? false;
+    bool hasIssues = false;
+    if (record != null) {
+      hasIssues = _hasIssuesForRecord(record);
+    }
+
     final statusColor = hasCheckIn
         ? (hasIssues ? AppColors.warningOrange : AppColors.successGreen)
         : AppColors.textSecondary;
@@ -1119,7 +1171,7 @@ class _CalendarScreenState extends State<CalendarScreen>
                 if (hasCheckIn)
                   Text(
                     hasIssues
-                        ? 'Some challenges were noted'
+                        ? 'Some health metrics need attention'
                         : 'Everything went smoothly!',
                     style: GoogleFonts.inter(
                       fontSize: 12,
@@ -1178,17 +1230,5 @@ class _CalendarScreenState extends State<CalendarScreen>
         ],
       ),
     );
-  }
-
-  IconData _getIssueIcon(String issue) {
-    final lowerIssue = issue.toLowerCase();
-    if (lowerIssue.contains('crav')) return Icons.smoke_free;
-    if (lowerIssue.contains('mood') || lowerIssue.contains('irritab')) {
-      return Icons.mood_bad;
-    }
-    if (lowerIssue.contains('sleep')) return Icons.bedtime;
-    if (lowerIssue.contains('anxi')) return Icons.psychology;
-    if (lowerIssue.contains('stress')) return Icons.sentiment_dissatisfied;
-    return Icons.warning_amber_rounded;
   }
 }

@@ -10,6 +10,22 @@ DateTime _parseDateTime(dynamic value, {DateTime? fallback}) {
   return fallback ?? DateTime.now();
 }
 
+/// Helper to safely parse latitude within [-90, 90]
+double? _parseLatitude(dynamic value) {
+  if (value is! num) return null;
+  final lat = value.toDouble();
+  if (lat < -90 || lat > 90) return null;
+  return lat;
+}
+
+/// Helper to safely parse longitude within [-180, 180]
+double? _parseLongitude(dynamic value) {
+  if (value is! num) return null;
+  final lng = value.toDouble();
+  if (lng < -180 || lng > 180) return null;
+  return lng;
+}
+
 /// Core user profile stored in users/{uid}/profile
 class UserProfile {
   final String uid;
@@ -20,6 +36,11 @@ class UserProfile {
   final DateTime createdAt;
   final DateTime lastLoginAt;
 
+  // Location Data
+  final String? locationAddress;
+  final double? latitude;
+  final double? longitude;
+
   UserProfile({
     required this.uid,
     required this.email,
@@ -28,6 +49,9 @@ class UserProfile {
     this.phoneNumber,
     required this.createdAt,
     required this.lastLoginAt,
+    this.locationAddress,
+    this.latitude,
+    this.longitude,
   });
 
   factory UserProfile.fromFirestore(DocumentSnapshot doc) {
@@ -40,7 +64,9 @@ class UserProfile {
     // Email is required
     final email = data['email'];
     if (email == null || email is! String) {
-      throw FormatException('Missing or invalid email in UserProfile: ${doc.id}');
+      throw FormatException(
+        'Missing or invalid email in UserProfile: ${doc.id}',
+      );
     }
 
     return UserProfile(
@@ -51,6 +77,9 @@ class UserProfile {
       phoneNumber: data['phoneNumber'] as String?,
       createdAt: _parseDateTime(data['createdAt']),
       lastLoginAt: _parseDateTime(data['lastLoginAt']),
+      locationAddress: data['locationAddress'] as String?,
+      latitude: _parseLatitude(data['latitude']),
+      longitude: _parseLongitude(data['longitude']),
     );
   }
 
@@ -62,6 +91,9 @@ class UserProfile {
       'phoneNumber': phoneNumber,
       'createdAt': Timestamp.fromDate(createdAt),
       'lastLoginAt': Timestamp.fromDate(lastLoginAt),
+      'locationAddress': locationAddress,
+      'latitude': latitude,
+      'longitude': longitude,
     };
   }
 
@@ -70,6 +102,9 @@ class UserProfile {
     String? photoUrl,
     String? phoneNumber,
     DateTime? lastLoginAt,
+    String? locationAddress,
+    double? latitude,
+    double? longitude,
   }) {
     return UserProfile(
       uid: uid,
@@ -79,6 +114,9 @@ class UserProfile {
       phoneNumber: phoneNumber ?? this.phoneNumber,
       createdAt: createdAt,
       lastLoginAt: lastLoginAt ?? this.lastLoginAt,
+      locationAddress: locationAddress ?? this.locationAddress,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
     );
   }
 }
@@ -88,10 +126,7 @@ class UserRoles {
   final bool isSenior;
   final bool isFamilyMember;
 
-  UserRoles({
-    this.isSenior = false,
-    this.isFamilyMember = false,
-  });
+  UserRoles({this.isSenior = false, this.isFamilyMember = false});
 
   /// Derived from flags - not stored, prevents invalid states
   String get currentRole {
@@ -114,10 +149,7 @@ class UserRoles {
   }
 
   Map<String, dynamic> toFirestore() {
-    return {
-      'isSenior': isSenior,
-      'isFamilyMember': isFamilyMember,
-    };
+    return {'isSenior': isSenior, 'isFamilyMember': isFamilyMember};
   }
 
   UserRoles copyWith({bool? isSenior, bool? isFamilyMember}) {
@@ -133,11 +165,23 @@ class SeniorState {
   final DateTime? lastCheckIn;
   final bool vacationMode;
   final EmergencyContact? emergencyContact;
+  final List<String> checkInSchedules;
+  final bool brainGamesEnabled;
+  final bool healthQuizEnabled;
+  final bool escalationAlarmActive;
+  final int currentStreak;
+  final DateTime? startDate; // The date when user started using the app
 
   SeniorState({
     this.lastCheckIn,
     this.vacationMode = false,
     this.emergencyContact,
+    this.checkInSchedules = const ['11:00 AM'],
+    this.brainGamesEnabled = false,
+    this.healthQuizEnabled = true,
+    this.escalationAlarmActive = false,
+    this.currentStreak = 0,
+    this.startDate,
   });
 
   factory SeniorState.fromFirestore(DocumentSnapshot doc) {
@@ -154,22 +198,72 @@ class SeniorState {
       emergencyContact = EmergencyContact.fromMap(ecData);
     }
 
+    // Parse checkInSchedules safely
+    List<String> schedules = ['11:00 AM'];
+    if (data['checkInSchedules'] is List) {
+      final list = data['checkInSchedules'] as List;
+      schedules = list
+          .where((item) => item != null)
+          .map((item) => item.toString())
+          .toList();
+    }
+
     return SeniorState(
       lastCheckIn: data['lastCheckIn'] is Timestamp
           ? (data['lastCheckIn'] as Timestamp).toDate()
           : null,
       vacationMode: data['vacationMode'] == true,
       emergencyContact: emergencyContact,
+      checkInSchedules: schedules,
+      brainGamesEnabled: data['brainGamesEnabled'] == true,
+      healthQuizEnabled: data['healthQuizEnabled'] != false, // Default true
+      escalationAlarmActive: data['escalationAlarmActive'] == true,
+      currentStreak: (data['currentStreak'] as num?)?.toInt() ?? 0,
+      startDate: data['startDate'] is Timestamp
+          ? (data['startDate'] as Timestamp).toDate()
+          : null,
     );
   }
 
   Map<String, dynamic> toFirestore() {
     return {
-      'lastCheckIn':
-          lastCheckIn != null ? Timestamp.fromDate(lastCheckIn!) : null,
+      'lastCheckIn': lastCheckIn != null
+          ? Timestamp.fromDate(lastCheckIn!)
+          : null,
       'vacationMode': vacationMode,
       'emergencyContact': emergencyContact?.toMap(),
+      'checkInSchedules': checkInSchedules,
+      'brainGamesEnabled': brainGamesEnabled,
+      'healthQuizEnabled': healthQuizEnabled,
+      'escalationAlarmActive': escalationAlarmActive,
+      'currentStreak': currentStreak,
+      'startDate': startDate != null ? Timestamp.fromDate(startDate!) : null,
     };
+  }
+
+  SeniorState copyWith({
+    DateTime? lastCheckIn,
+    bool? vacationMode,
+    EmergencyContact? emergencyContact,
+    List<String>? checkInSchedules,
+    bool? brainGamesEnabled,
+    bool? healthQuizEnabled,
+    bool? escalationAlarmActive,
+    int? currentStreak,
+    DateTime? startDate,
+  }) {
+    return SeniorState(
+      lastCheckIn: lastCheckIn ?? this.lastCheckIn,
+      vacationMode: vacationMode ?? this.vacationMode,
+      emergencyContact: emergencyContact ?? this.emergencyContact,
+      checkInSchedules: checkInSchedules ?? this.checkInSchedules,
+      brainGamesEnabled: brainGamesEnabled ?? this.brainGamesEnabled,
+      healthQuizEnabled: healthQuizEnabled ?? this.healthQuizEnabled,
+      escalationAlarmActive:
+          escalationAlarmActive ?? this.escalationAlarmActive,
+      currentStreak: currentStreak ?? this.currentStreak,
+      startDate: startDate ?? this.startDate,
+    );
   }
 }
 
@@ -191,9 +285,7 @@ class FamilyState {
   }
 
   Map<String, dynamic> toFirestore() {
-    return {
-      'defaultRelationship': defaultRelationship,
-    };
+    return {'defaultRelationship': defaultRelationship};
   }
 }
 
@@ -219,14 +311,18 @@ class EmergencyContact {
     }
 
     final phoneNumber = map['phoneNumber'];
-    if (phoneNumber == null || phoneNumber is! String || phoneNumber.trim().isEmpty) {
+    if (phoneNumber == null ||
+        phoneNumber is! String ||
+        phoneNumber.trim().isEmpty) {
       throw const FormatException(
         'EmergencyContact: "phoneNumber" field is required and must be a non-empty string',
       );
     }
 
     final relationship = map['relationship'];
-    if (relationship == null || relationship is! String || relationship.trim().isEmpty) {
+    if (relationship == null ||
+        relationship is! String ||
+        relationship.trim().isEmpty) {
       throw const FormatException(
         'EmergencyContact: "relationship" field is required and must be a non-empty string',
       );

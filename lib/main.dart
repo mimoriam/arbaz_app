@@ -12,6 +12,15 @@ import 'services/qr_invite_service.dart';
 import 'services/role_preference_service.dart';
 import 'services/theme_provider.dart';
 import 'services/vacation_mode_provider.dart';
+import 'services/quotes_service.dart';
+import 'services/location_service.dart';
+import 'services/contacts_service.dart';
+import 'services/checkin_schedule_service.dart';
+import 'providers/brain_games_provider.dart';
+import 'providers/checkin_schedule_provider.dart';
+import 'providers/health_quiz_provider.dart';
+import 'providers/escalation_alarm_provider.dart';
+import 'providers/games_provider.dart';
 import 'utils/app_theme.dart';
 
 void main() {
@@ -95,10 +104,6 @@ class _AppInitializerState extends State<AppInitializer> {
     // Success - show main app with providers
     return MultiProvider(
       providers: [
-        // Theme & UI state
-        ChangeNotifierProvider(create: (_) => ThemeProvider()),
-        ChangeNotifierProvider(create: (_) => VacationModeProvider()),
-
         // Auth
         Provider(create: (_) => AuthService()),
         ChangeNotifierProxyProvider<AuthService, AuthState>(
@@ -111,6 +116,108 @@ class _AppInitializerState extends State<AppInitializer> {
         Provider(create: (_) => FirestoreService()),
         Provider(create: (_) => QrInviteService()),
         Provider(create: (_) => RolePreferenceService()),
+        
+        // New Services
+        Provider(create: (_) => DailyQuotesService()),
+        Provider(create: (_) => LocationService()),
+        Provider(create: (_) => FamilyContactsService()),
+        
+        // Dependent Services
+        ProxyProvider<FirestoreService, CheckInScheduleService>(
+          update: (_, firestoreService, previous) {
+            // Return existing instance if available, or create new one
+            return previous ?? CheckInScheduleService(firestoreService);
+          },
+        ),
+
+        // Features Providers
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),
+        ChangeNotifierProvider(create: (_) => VacationModeProvider()),
+        
+        ChangeNotifierProxyProvider<FirestoreService, BrainGamesProvider>(
+          create: (context) {
+            final p = BrainGamesProvider(context.read<FirestoreService>());
+            p.init();
+            return p;
+          },
+          update: (_, firestoreService, previous) {
+            if (previous != null) {
+              previous.firestoreService = firestoreService;
+              return previous;
+            }
+            final p = BrainGamesProvider(firestoreService);
+            p.init();
+            return p;
+          },
+        ),
+        
+        ChangeNotifierProxyProvider<CheckInScheduleService, CheckInScheduleProvider>(
+          create: (context) {
+            final p = CheckInScheduleProvider(context.read<CheckInScheduleService>());
+            p.init();
+            return p;
+          },
+          update: (_, scheduleService, previous) {
+            if (previous != null) {
+              previous.scheduleService = scheduleService;
+              return previous;
+            }
+            final p = CheckInScheduleProvider(scheduleService);
+            p.init();
+            return p;
+          },
+        ),
+        
+        ChangeNotifierProxyProvider<FirestoreService, HealthQuizProvider>(
+          create: (context) {
+            final p = HealthQuizProvider(context.read<FirestoreService>());
+            p.init();
+            return p;
+          },
+          update: (_, firestoreService, previous) {
+            if (previous != null) {
+              previous.firestoreService = firestoreService;
+              return previous;
+            }
+            final p = HealthQuizProvider(firestoreService);
+            p.init();
+            return p;
+          },
+        ),
+        
+        ChangeNotifierProxyProvider<FirestoreService, EscalationAlarmProvider>(
+          create: (context) {
+            final p = EscalationAlarmProvider(context.read<FirestoreService>());
+            p.init();
+            return p;
+          },
+          update: (_, firestoreService, previous) {
+            if (previous != null) {
+              previous.firestoreService = firestoreService;
+              return previous;
+            }
+            final p = EscalationAlarmProvider(firestoreService);
+            p.init();
+            return p;
+          },
+        ),
+        
+        ChangeNotifierProxyProvider<FirestoreService, GamesProvider>(
+          create: (context) {
+            final p = GamesProvider(context.read<FirestoreService>());
+            p.init();
+            return p;
+          },
+          update: (_, firestoreService, previous) {
+            if (previous != null) {
+              previous.firestoreService = firestoreService;
+              return previous;
+            }
+            final p = GamesProvider(firestoreService);
+            p.init();
+            return p;
+          },
+        ),
       ],
       child: const MainApp(),
     );
