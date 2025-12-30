@@ -110,7 +110,13 @@ class FirestoreService {
   }
 
   Future<void> setAsSenior(String uid) async {
-    await setRole(uid, isSenior: true);
+    // When user explicitly chooses to be a senior (initial role selection),
+    // they should be confirmed automatically. The confirmation dialog is
+    // only for users who were never seniors switching to senior view.
+    await _rolesRef(uid).set({
+      'isSenior': true,
+      'hasConfirmedSeniorRole': true,
+    }, SetOptions(merge: true));
   }
 
   Future<void> setAsFamilyMember(String uid) async {
@@ -125,6 +131,17 @@ class FirestoreService {
       'currentRole': role,
     }, SetOptions(merge: true));
   }
+
+  /// Marks the user as having explicitly confirmed they want to be a senior.
+  /// This enables their data to appear in family dashboards and charts.
+  /// Called when user confirms the senior opt-in dialog.
+  Future<void> confirmSeniorRole(String uid) async {
+    await _rolesRef(uid).set({
+      'hasConfirmedSeniorRole': true,
+      'isSenior': true,
+    }, SetOptions(merge: true));
+  }
+
 
   // ===== Volatile State Operations =====
 

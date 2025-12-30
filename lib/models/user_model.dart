@@ -126,11 +126,13 @@ class UserRoles {
   final bool isSenior;
   final bool isFamilyMember;
   final String? activeRole; // The persisted active role: 'senior' or 'family'
+  final bool hasConfirmedSeniorRole; // True if user explicitly opted into senior features
 
   UserRoles({
     this.isSenior = false, 
     this.isFamilyMember = false,
     this.activeRole,
+    this.hasConfirmedSeniorRole = false,
   });
 
   /// Derived from flags - not stored, prevents invalid states
@@ -151,6 +153,7 @@ class UserRoles {
       isSenior: data['isSenior'] == true,
       isFamilyMember: data['isFamilyMember'] == true,
       activeRole: data['currentRole'] as String?,
+      hasConfirmedSeniorRole: data['hasConfirmedSeniorRole'] == true,
     );
   }
 
@@ -159,6 +162,7 @@ class UserRoles {
       'isSenior': isSenior, 
       'isFamilyMember': isFamilyMember,
       'currentRole': activeRole,
+      'hasConfirmedSeniorRole': hasConfirmedSeniorRole,
     };
   }
 
@@ -166,14 +170,17 @@ class UserRoles {
     bool? isSenior, 
     bool? isFamilyMember,
     String? activeRole,
+    bool? hasConfirmedSeniorRole,
   }) {
     return UserRoles(
       isSenior: isSenior ?? this.isSenior,
       isFamilyMember: isFamilyMember ?? this.isFamilyMember,
       activeRole: activeRole ?? this.activeRole,
+      hasConfirmedSeniorRole: hasConfirmedSeniorRole ?? this.hasConfirmedSeniorRole,
     );
   }
 }
+
 
 /// Volatile senior state stored in users/{uid}/seniorState
 class SeniorState {

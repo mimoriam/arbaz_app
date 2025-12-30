@@ -1571,10 +1571,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 } else {
                   // Current user is senior, invited user is family
                   // Only set isSenior=true, keep isFamilyMember if it exists
+                  // Also mark as confirmed so their data propagates to family
                   await firestoreService.setRole(
                     user.uid,
                     isSenior: true,
                   );
+                  await firestoreService.confirmSeniorRole(user.uid);
                   // Also set active role to senior to show the dashboard immediately
                   await firestoreService.updateCurrentRole(user.uid, 'senior');
                 }

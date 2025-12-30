@@ -1598,6 +1598,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   bool _isLoadingSeniorData = true;
   List<WellnessDataPoint> _weeklyWellnessData = [];
   StreamSubscription? _seniorStateSubscription;
+  StreamSubscription? _connectionsSubscription; // Listen for new connections
   String _familyName = ''; // Empty until loaded
   bool _isLoadingFamilyProfile = true; // Loading state for profile
   
@@ -1611,6 +1612,25 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     _tabController = TabController(length: 3, vsync: this);
     _loadSeniorData();
     _loadFamilyProfile();
+    _listenToConnectionChanges(); // Start listening for connection changes
+  }
+  
+  /// Listen for connection changes to auto-refresh when new connections are added
+  void _listenToConnectionChanges() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    
+    final firestoreService = context.read<FirestoreService>();
+    
+    // Listen to family connections stream (user is family member)
+    _connectionsSubscription = firestoreService
+        .getConnectionsForFamily(user.uid)
+        .skip(1) // Skip initial value (already loaded in _loadSeniorData)
+        .listen((connections) {
+      debugPrint('📡 Connection stream updated: ${connections.length} connections');
+      // Reload senior data when connections change
+      _loadSeniorData();
+    });
   }
 
   Future<void> _loadFamilyProfile() async {
@@ -1671,6 +1691,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
 
   @override
   void dispose() {
+    _connectionsSubscription?.cancel();
     _seniorStateSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
@@ -1732,8 +1753,17 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       List<SeniorInfo> allSeniors = [];
 
       // From family connections: get seniors (user is family member)
+      // Only include seniors who have explicitly confirmed their senior role
       if (familyConnections.isNotEmpty) {
         for (final conn in familyConnections) {
+          // Check if senior has confirmed their role
+          final seniorRoles = await firestoreService.getUserRoles(conn.seniorId)
+              .catchError((_) => null);
+          if (seniorRoles?.hasConfirmedSeniorRole != true) {
+            debugPrint('Skipping unconfirmed senior: ${conn.seniorId}');
+            continue;
+          }
+          
           final profile = await firestoreService.getUserProfile(conn.seniorId)
               .catchError((_) => null);
           final name = profile?.displayName ?? 
@@ -1741,14 +1771,22 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               'Senior';
           allSeniors.add(SeniorInfo(id: conn.seniorId, name: name));
         }
-        debugPrint('Found ${familyConnections.length} seniors via getConnectionsForFamily');
+        debugPrint('Found ${allSeniors.length} confirmed seniors via getConnectionsForFamily');
       }
       
       // From senior connections: get family members (user is senior)
-      // This allows bidirectional viewing
+      // This allows bidirectional viewing, but only show those who confirmed senior role
       if (seniorConnections.isNotEmpty) {
         for (final conn in seniorConnections) {
           // Here familyId is the other person (family member)
+          // Check if they have confirmed their senior role (only show confirmed seniors)
+          final familyRoles = await firestoreService.getUserRoles(conn.familyId)
+              .catchError((_) => null);
+          if (familyRoles?.hasConfirmedSeniorRole != true) {
+            debugPrint('Skipping unconfirmed family member: ${conn.familyId}');
+            continue;
+          }
+          
           final profile = await firestoreService.getUserProfile(conn.familyId)
               .catchError((_) => null);
           final name = profile?.displayName ?? 
@@ -1757,7 +1795,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           // Add as "senior" info for display purposes (we're viewing their data)
           allSeniors.add(SeniorInfo(id: conn.familyId, name: name));
         }
-        debugPrint('Found ${seniorConnections.length} family members via getConnectionsForSenior');
+        debugPrint('Found ${allSeniors.length} confirmed members via getConnectionsForSenior');
       }
       
       if (allSeniors.isEmpty) {
@@ -1780,6 +1818,14 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             .toList();
 
         for (final contact in seniorContacts) {
+          // Check if senior has confirmed their role
+          final contactRoles = await firestoreService.getUserRoles(contact.contactUid!)
+              .catchError((_) => null);
+          if (contactRoles?.hasConfirmedSeniorRole != true) {
+            debugPrint('Skipping unconfirmed contact: ${contact.contactUid}');
+            continue;
+          }
+          
           final profile = await firestoreService.getUserProfile(contact.contactUid!)
               .catchError((_) => null);
           final name = profile?.displayName ?? 
@@ -1798,6 +1844,14 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             .toList();
 
         for (final contact in familyContacts) {
+          // Check if family member has confirmed senior role
+          final contactRoles = await firestoreService.getUserRoles(contact.contactUid!)
+              .catchError((_) => null);
+          if (contactRoles?.hasConfirmedSeniorRole != true) {
+            debugPrint('Skipping unconfirmed family contact: ${contact.contactUid}');
+            continue;
+          }
+          
           final profile = await firestoreService.getUserProfile(contact.contactUid!)
               .catchError((_) => null);
           final name = profile?.displayName ?? 
@@ -2047,14 +2101,105 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     }
   }
 
-  void _switchToSenior() {
+  Future<void> _switchToSenior() async {
     final firestoreService = context.read<FirestoreService>();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      debugPrint('Cannot switch role: No authenticated user');
+      return;
+    }
+
+    // Check if user has already confirmed senior role
+    final roles = await firestoreService.getUserRoles(user.uid);
+    final alreadyConfirmed = roles?.hasConfirmedSeniorRole ?? false;
+
+    if (!alreadyConfirmed) {
+      // Show confirmation dialog for first-time senior switch
+      final confirmed = await _showSeniorConfirmationDialog();
+      if (confirmed != true) return; // User cancelled
+
+      // Persist confirmation
+      await firestoreService.confirmSeniorRole(user.uid);
+    }
+
+    // Proceed with existing role switch logic
     _switchRole(
       targetRole: 'senior',
       setRoleInFirestore: (uid) => firestoreService.setAsSenior(uid),
       targetScreen: const SeniorHomeScreen(),
     );
   }
+
+  /// Shows confirmation dialog when user switches to Senior View for the first time.
+  /// Returns true if user confirms, false if cancelled.
+  Future<bool?> _showSeniorConfirmationDialog() {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.primaryBlue.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.swap_horiz_rounded,
+                color: AppColors.primaryBlue,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Become a Senior?',
+              style: GoogleFonts.inter(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Switching to Senior View will make your check-ins, health data, and location visible to connected family members. This allows them to monitor your safety.\n\nYou can always switch views later, but your data will remain visible to family members.',
+          style: GoogleFonts.inter(fontSize: 15, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: Colors.grey,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryBlue,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              'I Understand, Continue',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
 
   String _getGreeting() {
     final hour = DateTime.now().hour;
