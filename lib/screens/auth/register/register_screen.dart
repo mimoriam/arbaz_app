@@ -4,6 +4,7 @@ import 'package:arbaz_app/services/auth_state.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/models/user_model.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
+import 'package:arbaz_app/utils/timezone_helper.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_form_builder/flutter_form_builder.dart';
 import 'package:form_builder_validators/form_builder_validators.dart';
@@ -140,6 +141,7 @@ class _RegisterScreenState extends State<RegisterScreen>
           displayName: name,
           createdAt: DateTime.now(),
           lastLoginAt: DateTime.now(),
+          timezone: TimezoneHelper.getDeviceTimezone(),
         );
         final roles = UserRoles();
 
@@ -207,6 +209,7 @@ class _RegisterScreenState extends State<RegisterScreen>
               photoUrl: user.photoURL,
               createdAt: DateTime.now(),
               lastLoginAt: DateTime.now(),
+              timezone: TimezoneHelper.getDeviceTimezone(),
             );
             final roles = UserRoles();
             await firestoreService.createUserWithRoles(user.uid, profile, roles);

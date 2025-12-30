@@ -8,6 +8,7 @@ import 'package:arbaz_app/services/location_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/models/checkin_model.dart';
+import 'package:arbaz_app/models/activity_log.dart';
 import 'package:arbaz_app/providers/games_provider.dart';
 
 /// Data class to hold check-in responses
@@ -244,6 +245,23 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
     while (attempt < maxAttempts) {
       try {
         await firestoreService.recordCheckIn(user.uid, record);
+        
+        // Log the check-in activity for the family dashboard
+        try {
+          final activityLog = ActivityLog.checkIn(
+            seniorId: user.uid,
+            timestamp: record.timestamp,
+            mood: _response.mood,
+            sleep: _response.sleep,
+            energy: _response.energy,
+            brainExerciseCompleted: _response.wantsBrainExercise,
+          );
+          await firestoreService.logActivity(user.uid, activityLog);
+        } catch (e) {
+          // Don't fail the check-in if activity logging fails
+          debugPrint('Activity logging failed (non-critical): $e');
+        }
+        
         return; // Success!
       } catch (e) {
         attempt++;

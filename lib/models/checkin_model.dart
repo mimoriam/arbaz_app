@@ -75,4 +75,33 @@ class CheckInRecord {
       'locationAddress': locationAddress,
     };
   }
+
+  /// Creates a copy with updated values
+  CheckInRecord copyWith({
+    String? id,
+    String? userId,
+    DateTime? timestamp,
+    String? mood,
+    String? sleep,
+    String? energy,
+    String? medication,
+    bool? brainExerciseCompleted,
+    double? latitude,
+    double? longitude,
+    String? locationAddress,
+  }) {
+    return CheckInRecord(
+      id: id ?? this.id,
+      userId: userId ?? this.userId,
+      timestamp: timestamp ?? this.timestamp,
+      mood: mood ?? this.mood,
+      sleep: sleep ?? this.sleep,
+      energy: energy ?? this.energy,
+      medication: medication ?? this.medication,
+      brainExerciseCompleted: brainExerciseCompleted ?? this.brainExerciseCompleted,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      locationAddress: locationAddress ?? this.locationAddress,
+    );
+  }
 }

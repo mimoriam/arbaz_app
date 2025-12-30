@@ -1782,6 +1782,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           final profile = await firestoreService.getUserProfile(conn.seniorId)
               .catchError((_) => null);
           final name = profile?.displayName ?? 
+              conn.seniorName ??
               profile?.email.split('@').first ?? 
               'Senior';
           allSeniors.add(SeniorInfo(id: conn.seniorId, name: name));

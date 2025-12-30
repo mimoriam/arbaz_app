@@ -68,6 +68,23 @@ class GameResult {
     
     return ((accuracyScore * 0.6) + (responseScore * 0.4)).round();
   }
+
+  /// Creates a copy with updated values
+  GameResult copyWith({
+    String? id,
+    String? gameType,
+    DateTime? timestamp,
+    int? score,
+    Map<String, dynamic>? metrics,
+  }) {
+    return GameResult(
+      id: id ?? this.id,
+      gameType: gameType ?? this.gameType,
+      timestamp: timestamp ?? this.timestamp,
+      score: score ?? this.score,
+      metrics: metrics ?? this.metrics,
+    );
+  }
 }
 
 /// Aggregated cognitive metrics for display

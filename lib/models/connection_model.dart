@@ -19,6 +19,7 @@ class Connection {
   final String familyId;
   final String status; // 'active', 'pending', 'removed'
   final String? relationshipType; // 'son', 'daughter', 'spouse', etc.
+  final String? seniorName; // Cached name from QR code (fallback if profile missing)
   final DateTime createdAt;
 
   Connection({
@@ -27,6 +28,7 @@ class Connection {
     required this.familyId,
     required this.status,
     this.relationshipType,
+    this.seniorName,
     required this.createdAt,
   });
 
@@ -42,6 +44,7 @@ class Connection {
       familyId: data['familyId'] as String? ?? '',
       status: data['status'] as String? ?? 'pending',
       relationshipType: data['relationshipType'] as String?,
+      seniorName: data['seniorName'] as String?,
       createdAt: _parseDateTime(data['createdAt']),
     );
   }
@@ -52,17 +55,19 @@ class Connection {
       'familyId': familyId,
       'status': status,
       'relationshipType': relationshipType,
+      if (seniorName != null) 'seniorName': seniorName,
       'createdAt': Timestamp.fromDate(createdAt),
     };
   }
 
-  Connection copyWith({String? status, String? relationshipType}) {
+  Connection copyWith({String? status, String? relationshipType, String? seniorName}) {
     return Connection(
       id: id,
       seniorId: seniorId,
       familyId: familyId,
       status: status ?? this.status,
       relationshipType: relationshipType ?? this.relationshipType,
+      seniorName: seniorName ?? this.seniorName,
       createdAt: createdAt,
     );
   }

@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/models/game_result.dart';
+import 'package:arbaz_app/models/activity_log.dart';
 
 /// Model for tracking game metrics
 class MemoryMatchMetrics {
@@ -341,7 +342,22 @@ class _MemoryMatchScreenState extends State<MemoryMatchScreen>
 
     try {
       if (mounted) {
-        await context.read<FirestoreService>().saveGameResult(user.uid, result);
+        final firestoreService = context.read<FirestoreService>();
+        await firestoreService.saveGameResult(user.uid, result);
+        
+        // Log the brain game activity for the family dashboard
+        try {
+          final activityLog = ActivityLog.brainGame(
+            seniorId: user.uid,
+            timestamp: result.timestamp,
+            gameType: 'memory_match',
+            score: score.round(),
+          );
+          await firestoreService.logActivity(user.uid, activityLog);
+        } catch (e) {
+          // Don't fail the save if activity logging fails
+          debugPrint('Activity logging failed (non-critical): $e');
+        }
       }
     } catch (e) {
       debugPrint('Error saving game result: $e');

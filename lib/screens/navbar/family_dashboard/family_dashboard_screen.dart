@@ -1,30 +1,46 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:arbaz_app/screens/navbar/calendar/calendar_screen.dart';
-import 'package:arbaz_app/screens/navbar/settings/settings_screen.dart';
+import 'package:provider/provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:arbaz_app/services/firestore_service.dart';
+import 'package:arbaz_app/models/activity_log.dart';
+import 'package:intl/intl.dart';
 
-/// Model for family member
-class FamilyMember {
+/// Model for family member display in dashboard
+class FamilyMemberData {
+  final String id;
   final String name;
-  final String relationship;
-  final String? avatarUrl;
-  final bool isOnline;
-  final String lastSeen;
-  final String status; // 'safe', 'warning', 'alert'
+  final String? relationship;
+  final String status; // 'safe', 'pending', 'alert'
   final String? location;
   final DateTime? lastCheckIn;
+  final bool isVacationMode;
 
-  const FamilyMember({
+  const FamilyMemberData({
+    required this.id,
     required this.name,
-    required this.relationship,
-    this.avatarUrl,
-    this.isOnline = false,
-    required this.lastSeen,
+    this.relationship,
     required this.status,
     this.location,
     this.lastCheckIn,
+    this.isVacationMode = false,
   });
+
+  /// Calculate "last seen" string from lastCheckIn
+  String get lastSeenText {
+    if (lastCheckIn == null) return 'No check-in yet';
+    
+    final now = DateTime.now();
+    final diff = now.difference(lastCheckIn!);
+    
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays == 1) return 'Yesterday';
+    return DateFormat('MMM d').format(lastCheckIn!);
+  }
 }
 
 class FamilyDashboardScreen extends StatefulWidget {
@@ -40,59 +56,15 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
   late Animation<double> _fadeAnimation;
   int _selectedTab = 0; // 0: Overview, 1: Activity, 2: Alerts
 
-  // Mock family members data
-  final List<FamilyMember> _familyMembers = [
-    FamilyMember(
-      name: 'Grandma Annie',
-      relationship: 'Parent',
-      isOnline: true,
-      lastSeen: 'Now',
-      status: 'safe',
-      location: 'Home',
-      lastCheckIn: DateTime.now().subtract(const Duration(hours: 2)),
-    ),
-    FamilyMember(
-      name: 'Grandpa Bob',
-      relationship: 'Parent',
-      isOnline: false,
-      lastSeen: '3h ago',
-      status: 'warning',
-      location: 'Park nearby',
-      lastCheckIn: DateTime.now().subtract(const Duration(hours: 5)),
-    ),
-  ];
-
-  // Mock activity data
-  final List<Map<String, dynamic>> _recentActivity = [
-    {
-      'member': 'Grandma Annie',
-      'action': 'Checked in',
-      'time': '2 hours ago',
-      'icon': Icons.check_circle_outline,
-      'color': Color(0xFF22C55E),
-    },
-    {
-      'member': 'Grandpa Bob',
-      'action': 'Completed brain game',
-      'time': '4 hours ago',
-      'icon': Icons.psychology,
-      'color': Color(0xFF6366F1),
-    },
-    {
-      'member': 'Grandma Annie',
-      'action': 'Took medication',
-      'time': '6 hours ago',
-      'icon': Icons.medication,
-      'color': Color(0xFF3B82F6),
-    },
-    {
-      'member': 'Grandpa Bob',
-      'action': 'Missed check-in reminder',
-      'time': 'Yesterday',
-      'icon': Icons.warning_amber_rounded,
-      'color': Color(0xFFF59E0B),
-    },
-  ];
+  // Real data state
+  List<FamilyMemberData> _familyMembers = [];
+  List<ActivityLog> _recentActivity = [];
+  List<ActivityLog> _alerts = [];
+  bool _isLoading = true;
+  String? _errorMessage;
+  
+  // Stream subscriptions
+  StreamSubscription? _connectionsSubscription;
 
   @override
   void initState() {
@@ -107,22 +79,171 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
     );
 
     _animationController.forward();
+    _loadDashboardData();
   }
 
   @override
   void dispose() {
+    _connectionsSubscription?.cancel();
     _animationController.dispose();
     super.dispose();
   }
 
-  String _getGreeting() {
-    final hour = DateTime.now().hour;
-    if (hour < 12) {
-      return 'Good Morning';
-    } else if (hour < 17) {
-      return 'Good Afternoon';
-    } else {
-      return 'Good Evening';
+  Future<void> _loadDashboardData() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Not logged in';
+        });
+      }
+      return;
+    }
+
+    try {
+      final firestoreService = context.read<FirestoreService>();
+      
+      // Get connections where current user is family member
+      List<dynamic> connections;
+      try {
+        connections = await firestoreService
+            .getConnectionsForFamily(user.uid)
+            .first
+            .timeout(const Duration(seconds: 10));
+      } catch (e, stack) {
+        debugPrint('Error fetching connections for user ${user.uid}: $e\n$stack');
+        connections = [];
+      }
+
+      List<FamilyMemberData> members = [];
+      List<String> seniorIds = [];
+
+      for (final conn in connections) {
+        // Check if senior has confirmed their role
+        final seniorRoles = await firestoreService
+            .getUserRoles(conn.seniorId)
+            .catchError((e, stack) {
+          debugPrint('Failed to getUserRoles for seniorId: ${conn.seniorId}: $e');
+          return null;
+        });
+        
+        if (seniorRoles?.hasConfirmedSeniorRole != true) {
+          continue; // Skip unconfirmed seniors
+        }
+
+        seniorIds.add(conn.seniorId);
+        
+        // Get senior profile
+        final profile = await firestoreService
+            .getUserProfile(conn.seniorId)
+            .catchError((e, stack) {
+          debugPrint('Failed to getUserProfile for seniorId: ${conn.seniorId}: $e');
+          return null;
+        });
+        
+        // Get senior state for check-in status and vacation mode
+        final seniorState = await firestoreService
+            .getSeniorState(conn.seniorId)
+            .catchError((e, stack) {
+          debugPrint('Failed to getSeniorState for seniorId: ${conn.seniorId}: $e');
+          return null;
+        });
+        
+        // Calculate status
+        String status = 'pending';
+        if (seniorState != null) {
+          if (seniorState.vacationMode) {
+            status = 'safe'; // Vacation mode counts as safe
+          } else if (seniorState.lastCheckIn != null) {
+            final now = DateTime.now();
+            final lastCheckIn = seniorState.lastCheckIn!;
+            final isSameDay = lastCheckIn.year == now.year &&
+                lastCheckIn.month == now.month &&
+                lastCheckIn.day == now.day;
+            status = isSameDay ? 'safe' : 'pending';
+            
+            // Check for missed check-ins (has schedules passed today with no check-in)
+            // Skip day-1 logic: don't show alert for seniors created today (matching Cloud Function behavior)
+            final isDay1 = seniorState.seniorCreatedAt != null &&
+                seniorState.seniorCreatedAt!.year == now.year &&
+                seniorState.seniorCreatedAt!.month == now.month &&
+                seniorState.seniorCreatedAt!.day == now.day;
+            
+            if (!isSameDay && seniorState.checkInSchedules.isNotEmpty && !isDay1) {
+              for (final schedule in seniorState.checkInSchedules) {
+                final scheduledTime = _parseScheduleTime(schedule, now);
+                if (scheduledTime != null && now.isAfter(scheduledTime)) {
+                  status = 'alert';
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        members.add(FamilyMemberData(
+          id: conn.seniorId,
+          name: profile?.displayName ?? 
+                conn.seniorName ??
+                profile?.email.split('@').first ?? 
+                'Senior',
+          relationship: conn.relationshipType ?? 'Family',
+          status: status,
+          location: profile?.locationAddress,
+          lastCheckIn: seniorState?.lastCheckIn,
+          isVacationMode: seniorState?.vacationMode ?? false,
+        ));
+      }
+
+      // Load activities for all connected seniors
+      List<ActivityLog> activities = [];
+      List<ActivityLog> alerts = [];
+      
+      if (seniorIds.isNotEmpty) {
+        activities = await firestoreService.getActivitiesForSeniors(
+          seniorIds,
+          limitPerSenior: 10,
+        );
+        alerts = await firestoreService.getAlertsForSeniors(
+          seniorIds,
+          limitPerSenior: 10,
+        );
+      }
+
+      if (mounted) {
+        setState(() {
+          _familyMembers = members;
+          _recentActivity = activities;
+          _alerts = alerts;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading dashboard data: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Failed to load data. Pull to refresh.';
+        });
+      }
+    }
+  }
+
+  /// Parse schedule time (e.g., "11:00 AM") to DateTime for today
+  DateTime? _parseScheduleTime(String schedule, DateTime now) {
+    try {
+      final format = DateFormat('h:mm a');
+      final time = format.parse(schedule.toUpperCase());
+      return DateTime(now.year, now.month, now.day, time.hour, time.minute);
+    } catch (e) {
+      return null;
     }
   }
 
@@ -136,138 +257,86 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
       body: SafeArea(
         child: FadeTransition(
           opacity: _fadeAnimation,
-          child: Column(
-            children: [
-              // Header
-              // _buildHeader(isDarkMode),
+          child: RefreshIndicator(
+            onRefresh: _loadDashboardData,
+            child: Column(
+              children: [
+                // Tab Bar
+                _buildTabBar(isDarkMode),
 
-              // Tab Bar
-              _buildTabBar(isDarkMode),
-
-              // Content based on selected tab
-              Expanded(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 300),
-                  child: _buildTabContent(isDarkMode),
+                // Content based on selected tab
+                Expanded(
+                  child: _isLoading
+                      ? _buildLoadingState(isDarkMode)
+                      : _errorMessage != null
+                          ? _buildErrorState(isDarkMode)
+                          : AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 300),
+                              child: _buildTabContent(isDarkMode),
+                            ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildHeader(bool isDarkMode) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      child: Row(
+  Widget _buildLoadingState(bool isDarkMode) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // User Avatar
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: AppColors.primaryBlue.withValues(alpha: 0.3),
-                width: 2,
-              ),
-            ),
-            child: CircleAvatar(
-              backgroundColor:
-                  isDarkMode ? AppColors.surfaceDark : AppColors.inputFillLight,
-              child: Icon(
-                Icons.person_outline,
-                color: isDarkMode
-                    ? AppColors.textSecondaryDark
-                    : AppColors.textSecondary,
-                size: 24,
-              ),
-            ),
+          CircularProgressIndicator(
+            color: AppColors.primaryBlue,
           ),
-          const SizedBox(width: 12),
-
-          // Greeting Text
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _getGreeting(),
-                  style: GoogleFonts.inter(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: isDarkMode
-                        ? AppColors.textSecondaryDark
-                        : AppColors.textSecondary,
-                  ),
-                ),
-                Text(
-                  'Family Dashboard',
-                  style: GoogleFonts.inter(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: isDarkMode
-                        ? AppColors.textPrimaryDark
-                        : AppColors.textPrimary,
-                  ),
-                ),
-              ],
+          const SizedBox(height: 16),
+          Text(
+            'Loading family data...',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              color: isDarkMode
+                  ? AppColors.textSecondaryDark
+                  : AppColors.textSecondary,
             ),
-          ),
-
-          // Action Icons
-          _buildHeaderIcon(
-            Icons.calendar_today_outlined,
-            isDarkMode,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const CalendarScreen()),
-              );
-            },
-          ),
-          const SizedBox(width: 8),
-          _buildHeaderIcon(
-            Icons.settings_outlined,
-            isDarkMode,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
-            },
           ),
         ],
       ),
     );
   }
 
-  Widget _buildHeaderIcon(
-    IconData icon,
-    bool isDarkMode, {
-    VoidCallback? onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+  Widget _buildErrorState(bool isDarkMode) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.error_outline,
+            size: 48,
+            color: AppColors.warningOrange,
           ),
-        ),
-        child: Icon(
-          icon,
-          size: 20,
-          color: isDarkMode
-              ? AppColors.textSecondaryDark
-              : AppColors.textSecondary,
-        ),
+          const SizedBox(height: 16),
+          Text(
+            _errorMessage ?? 'An error occurred',
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              color: isDarkMode
+                  ? AppColors.textSecondaryDark
+                  : AppColors.textSecondary,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: _loadDashboardData,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryBlue,
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Retry', style: GoogleFonts.inter()),
+          ),
+        ],
       ),
     );
   }
@@ -315,24 +384,53 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
           Row(
             children: List.generate(tabs.length, (index) {
               final isSelected = _selectedTab == index;
+              // Show alert badge on Alerts tab if there are alerts
+              final showBadge = index == 2 && _alerts.isNotEmpty;
+              
               return Expanded(
                 child: GestureDetector(
                   onTap: () => setState(() => _selectedTab = index),
                   behavior: HitTestBehavior.opaque,
                   child: Center(
-                    child: AnimatedDefaultTextStyle(
-                      duration: const Duration(milliseconds: 300),
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight:
-                            isSelected ? FontWeight.w700 : FontWeight.w500,
-                        color: isSelected
-                            ? AppColors.primaryBlue
-                            : (isDarkMode
-                                ? AppColors.textSecondaryDark
-                                : AppColors.textSecondary),
-                      ),
-                      child: Text(tabs[index]),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 300),
+                          style: GoogleFonts.inter(
+                            fontSize: 14,
+                            fontWeight:
+                                isSelected ? FontWeight.w700 : FontWeight.w500,
+                            color: isSelected
+                                ? AppColors.primaryBlue
+                                : (isDarkMode
+                                    ? AppColors.textSecondaryDark
+                                    : AppColors.textSecondary),
+                          ),
+                          child: Text(tabs[index]),
+                        ),
+                        if (showBadge) ...[
+                          const SizedBox(width: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.dangerRed,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '${_alerts.length}',
+                              style: GoogleFonts.inter(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ),
@@ -358,9 +456,19 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
   }
 
   Widget _buildOverviewTab(bool isDarkMode) {
+    if (_familyMembers.isEmpty) {
+      return _buildEmptyState(
+        isDarkMode,
+        icon: Icons.people_outline,
+        title: 'No Seniors Connected',
+        subtitle: 'Connect with seniors to see their status here',
+      );
+    }
+
     return SingleChildScrollView(
       key: const ValueKey('overview'),
       padding: const EdgeInsets.symmetric(horizontal: 20),
+      physics: const AlwaysScrollableScrollPhysics(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -391,38 +499,40 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
           const SizedBox(height: 24),
 
           // Recent Activity Preview
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'RECENT ACTIVITY',
-                style: GoogleFonts.inter(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: isDarkMode
-                      ? AppColors.textSecondaryDark
-                      : AppColors.textSecondary,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              GestureDetector(
-                onTap: () => setState(() => _selectedTab = 1),
-                child: Text(
-                  'See All',
+          if (_recentActivity.isNotEmpty) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'RECENT ACTIVITY',
                   style: GoogleFonts.inter(
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.primaryBlue,
+                    color: isDarkMode
+                        ? AppColors.textSecondaryDark
+                        : AppColors.textSecondary,
+                    letterSpacing: 1.2,
                   ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
+                GestureDetector(
+                  onTap: () => setState(() => _selectedTab = 1),
+                  child: Text(
+                    'See All',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primaryBlue,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
 
-          // Activity Preview (first 2 items)
-          ...(_recentActivity.take(2).map((activity) =>
-              _buildActivityItem(activity, isDarkMode))),
+            // Activity Preview (first 2 items)
+            ...(_recentActivity.take(2).map((activity) =>
+                _buildActivityLogItem(activity, isDarkMode))),
+          ],
 
           const SizedBox(height: 32),
         ],
@@ -431,6 +541,9 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
   }
 
   Widget _buildQuickStats(bool isDarkMode) {
+    final safeCount = _familyMembers.where((m) => m.status == 'safe').length;
+    final needAttentionCount = _familyMembers.where((m) => m.status != 'safe').length;
+
     return Row(
       children: [
         Expanded(
@@ -448,7 +561,7 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
             icon: Icons.check_circle_outline,
             iconColor: AppColors.successGreen,
             label: 'Safe Today',
-            value: '${_familyMembers.where((m) => m.status == 'safe').length}',
+            value: '$safeCount',
             isDarkMode: isDarkMode,
           ),
         ),
@@ -458,7 +571,7 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
             icon: Icons.warning_amber_rounded,
             iconColor: AppColors.warningOrange,
             label: 'Need Attention',
-            value: '${_familyMembers.where((m) => m.status != 'safe').length}',
+            value: '$needAttentionCount',
             isDarkMode: isDarkMode,
           ),
         ),
@@ -521,12 +634,12 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
     );
   }
 
-  Widget _buildFamilyMemberCard(FamilyMember member, bool isDarkMode) {
+  Widget _buildFamilyMemberCard(FamilyMemberData member, bool isDarkMode) {
     final statusColor = member.status == 'safe'
         ? AppColors.successGreen
-        : (member.status == 'warning'
-            ? AppColors.warningOrange
-            : AppColors.dangerRed);
+        : (member.status == 'alert'
+            ? AppColors.dangerRed
+            : AppColors.warningOrange);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -600,31 +713,34 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
               children: [
                 Row(
                   children: [
-                    Text(
-                      member.name,
-                      style: GoogleFonts.inter(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: isDarkMode
-                            ? AppColors.textPrimaryDark
-                            : AppColors.textPrimary,
+                    Flexible(
+                      child: Text(
+                        member.name,
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: isDarkMode
+                              ? AppColors.textPrimaryDark
+                              : AppColors.textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    if (member.isOnline) ...[
+                    if (member.isVacationMode) ...[
                       const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 2),
                         decoration: BoxDecoration(
-                          color: AppColors.successGreen.withValues(alpha: 0.1),
+                          color: AppColors.primaryBlue.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: Text(
-                          'Online',
+                          '🌴 Vacation',
                           style: GoogleFonts.inter(
                             fontSize: 10,
                             fontWeight: FontWeight.w600,
-                            color: AppColors.successGreen,
+                            color: AppColors.primaryBlue,
                           ),
                         ),
                       ),
@@ -633,9 +749,9 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  member.location != null
-                      ? '📍 ${member.location} • ${member.lastSeen}'
-                      : 'Last seen: ${member.lastSeen}',
+                  member.location != null && member.location!.isNotEmpty
+                      ? '📍 ${member.location} • ${member.lastSeenText}'
+                      : 'Last seen: ${member.lastSeenText}',
                   style: GoogleFonts.inter(
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
@@ -662,17 +778,69 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
   }
 
   Widget _buildActivityTab(bool isDarkMode) {
+    if (_recentActivity.isEmpty) {
+      return _buildEmptyState(
+        isDarkMode,
+        icon: Icons.history,
+        title: 'No Activity Yet',
+        subtitle: 'Activity from your family members will appear here',
+      );
+    }
+
     return ListView.builder(
       key: const ValueKey('activity'),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       itemCount: _recentActivity.length,
       itemBuilder: (context, index) {
-        return _buildActivityItem(_recentActivity[index], isDarkMode);
+        return _buildActivityLogItem(_recentActivity[index], isDarkMode);
       },
     );
   }
 
-  Widget _buildActivityItem(Map<String, dynamic> activity, bool isDarkMode) {
+  Widget _buildActivityLogItem(ActivityLog activity, bool isDarkMode) {
+    // Get icon and color based on activity type
+    IconData icon;
+    Color color;
+    
+    switch (activity.activityType) {
+      case 'check_in':
+        icon = Icons.check_circle_outline;
+        color = AppColors.successGreen;
+        break;
+      case 'brain_game':
+        icon = Icons.psychology;
+        color = const Color(0xFF6366F1);
+        break;
+      case 'missed_check_in':
+        icon = Icons.warning_amber_rounded;
+        color = AppColors.warningOrange;
+        break;
+      default:
+        icon = Icons.info_outline;
+        color = AppColors.primaryBlue;
+    }
+
+    // Get member name from activity
+    final memberName = _familyMembers
+        .where((m) => m.id == activity.seniorId)
+        .map((m) => m.name)
+        .firstOrNull ?? 'Senior';
+
+    // Format time
+    final now = DateTime.now();
+    final activityTime = activity.timestamp;
+    String timeText;
+    
+    if (activityTime.year == now.year &&
+        activityTime.month == now.month &&
+        activityTime.day == now.day) {
+      timeText = DateFormat('h:mm a').format(activityTime);
+    } else if (now.difference(activityTime).inDays == 1) {
+      timeText = 'Yesterday';
+    } else {
+      timeText = DateFormat('MMM d').format(activityTime);
+    }
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
@@ -680,7 +848,9 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
         color: isDarkMode ? AppColors.surfaceDark : Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+          color: activity.isAlert
+              ? AppColors.warningOrange.withValues(alpha: 0.3)
+              : (isDarkMode ? AppColors.borderDark : AppColors.borderLight),
         ),
       ),
       child: Row(
@@ -689,12 +859,12 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: (activity['color'] as Color).withValues(alpha: 0.1),
+              color: color.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(
-              activity['icon'] as IconData,
-              color: activity['color'] as Color,
+              icon,
+              color: color,
               size: 22,
             ),
           ),
@@ -704,7 +874,7 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  activity['member'] as String,
+                  memberName,
                   style: GoogleFonts.inter(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
@@ -715,7 +885,7 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  activity['action'] as String,
+                  activity.actionDescription,
                   style: GoogleFonts.inter(
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
@@ -728,7 +898,7 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
             ),
           ),
           Text(
-            activity['time'] as String,
+            timeText,
             style: GoogleFonts.inter(
               fontSize: 12,
               fontWeight: FontWeight.w500,
@@ -743,63 +913,75 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
   }
 
   Widget _buildAlertsTab(bool isDarkMode) {
-    final alerts = _recentActivity
-        .where((a) => (a['color'] as Color) == const Color(0xFFF59E0B))
-        .toList();
-
-    if (alerts.isEmpty) {
-      return Center(
-        key: const ValueKey('alerts'),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                color: AppColors.successGreen.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.check_circle_outline,
-                color: AppColors.successGreen,
-                size: 40,
-              ),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              'All Clear!',
-              style: GoogleFonts.inter(
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                color: isDarkMode
-                    ? AppColors.textPrimaryDark
-                    : AppColors.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'No alerts or warnings at the moment',
-              style: GoogleFonts.inter(
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-                color: isDarkMode
-                    ? AppColors.textSecondaryDark
-                    : AppColors.textSecondary,
-              ),
-            ),
-          ],
-        ),
+    if (_alerts.isEmpty) {
+      return _buildEmptyState(
+        isDarkMode,
+        icon: Icons.check_circle_outline,
+        iconColor: AppColors.successGreen,
+        title: 'All Clear!',
+        subtitle: 'No alerts or warnings at the moment',
       );
     }
 
     return ListView.builder(
       key: const ValueKey('alerts'),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      itemCount: alerts.length,
+      itemCount: _alerts.length,
       itemBuilder: (context, index) {
-        return _buildActivityItem(alerts[index], isDarkMode);
+        return _buildActivityLogItem(_alerts[index], isDarkMode);
       },
+    );
+  }
+
+  Widget _buildEmptyState(
+    bool isDarkMode, {
+    required IconData icon,
+    Color? iconColor,
+    required String title,
+    required String subtitle,
+  }) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: (iconColor ?? AppColors.primaryBlue).withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              color: iconColor ?? AppColors.primaryBlue,
+              size: 40,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            title,
+            style: GoogleFonts.inter(
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              color: isDarkMode
+                  ? AppColors.textPrimaryDark
+                  : AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            subtitle,
+            style: GoogleFonts.inter(
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+              color: isDarkMode
+                  ? AppColors.textSecondaryDark
+                  : AppColors.textSecondary,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
     );
   }
 }

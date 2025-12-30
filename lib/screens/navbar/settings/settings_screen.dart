@@ -236,16 +236,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     const SizedBox(height: 18),
 
-                    // Family Dashboard Section - Family only
-                    if (widget.isFamilyView) ...[
-                      _buildSectionHeader(
-                        isDarkMode,
-                        icon: Icons.dashboard_outlined,
-                        title: 'DASHBOARD',
-                      ),
-                      const SizedBox(height: 12),
-                      _buildFamilyDashboardCard(isDarkMode),
-                    ],
+                    // // Family Dashboard Section - Family only
+                    // if (widget.isFamilyView) ...[
+                    //   _buildSectionHeader(
+                    //     isDarkMode,
+                    //     icon: Icons.dashboard_outlined,
+                    //     title: 'DASHBOARD',
+                    //   ),
+                    //   const SizedBox(height: 12),
+                    //   _buildFamilyDashboardCard(isDarkMode),
+                    // ],
 
                     // Safety Vault Card - Senior only
                     if (!widget.isFamilyView) ...[

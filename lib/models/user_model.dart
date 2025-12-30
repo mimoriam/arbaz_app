@@ -41,6 +41,9 @@ class UserProfile {
   final double? latitude;
   final double? longitude;
 
+  // Timezone for consistent time handling (e.g., 'Asia/Karachi')
+  final String? timezone;
+
   UserProfile({
     required this.uid,
     required this.email,
@@ -52,6 +55,7 @@ class UserProfile {
     this.locationAddress,
     this.latitude,
     this.longitude,
+    this.timezone,
   });
 
   factory UserProfile.fromFirestore(DocumentSnapshot doc) {
@@ -80,6 +84,7 @@ class UserProfile {
       locationAddress: data['locationAddress'] as String?,
       latitude: _parseLatitude(data['latitude']),
       longitude: _parseLongitude(data['longitude']),
+      timezone: data['timezone'] as String?,
     );
   }
 
@@ -94,6 +99,7 @@ class UserProfile {
       'locationAddress': locationAddress,
       'latitude': latitude,
       'longitude': longitude,
+      'timezone': timezone,
     };
   }
 
@@ -105,6 +111,7 @@ class UserProfile {
     String? locationAddress,
     double? latitude,
     double? longitude,
+    String? timezone,
   }) {
     return UserProfile(
       uid: uid,
@@ -117,6 +124,7 @@ class UserProfile {
       locationAddress: locationAddress ?? this.locationAddress,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      timezone: timezone ?? this.timezone,
     );
   }
 }
@@ -194,6 +202,9 @@ class SeniorState {
   final int currentStreak;
   final DateTime? startDate; // The date when user started using the app
   final DateTime? seniorCreatedAt; // When user first became a senior (for day 1 logic)
+  final int missedCheckInsToday; // Count of missed check-ins today (reset daily)
+  final DateTime? lastMissedCheckIn; // Timestamp of most recent missed check-in
+  final DateTime? nextExpectedCheckIn; // For scalable Cloud Function queries
 
   SeniorState({
     this.lastCheckIn,
@@ -206,6 +217,9 @@ class SeniorState {
     this.currentStreak = 0,
     this.startDate,
     this.seniorCreatedAt,
+    this.missedCheckInsToday = 0,
+    this.lastMissedCheckIn,
+    this.nextExpectedCheckIn,
   });
 
   factory SeniorState.fromFirestore(DocumentSnapshot doc) {
@@ -249,6 +263,13 @@ class SeniorState {
       seniorCreatedAt: data['seniorCreatedAt'] is Timestamp
           ? (data['seniorCreatedAt'] as Timestamp).toDate()
           : null,
+      missedCheckInsToday: (data['missedCheckInsToday'] as num?)?.toInt() ?? 0,
+      lastMissedCheckIn: data['lastMissedCheckIn'] is Timestamp
+          ? (data['lastMissedCheckIn'] as Timestamp).toDate()
+          : null,
+      nextExpectedCheckIn: data['nextExpectedCheckIn'] is Timestamp
+          ? (data['nextExpectedCheckIn'] as Timestamp).toDate()
+          : null,
     );
   }
 
@@ -266,6 +287,9 @@ class SeniorState {
       'currentStreak': currentStreak,
       'startDate': startDate != null ? Timestamp.fromDate(startDate!) : null,
       'seniorCreatedAt': seniorCreatedAt != null ? Timestamp.fromDate(seniorCreatedAt!) : null,
+      'missedCheckInsToday': missedCheckInsToday,
+      'lastMissedCheckIn': lastMissedCheckIn != null ? Timestamp.fromDate(lastMissedCheckIn!) : null,
+      'nextExpectedCheckIn': nextExpectedCheckIn != null ? Timestamp.fromDate(nextExpectedCheckIn!) : null,
     };
   }
 
@@ -280,6 +304,9 @@ class SeniorState {
     int? currentStreak,
     DateTime? startDate,
     DateTime? seniorCreatedAt,
+    int? missedCheckInsToday,
+    DateTime? lastMissedCheckIn,
+    DateTime? nextExpectedCheckIn,
   }) {
     return SeniorState(
       lastCheckIn: lastCheckIn ?? this.lastCheckIn,
@@ -293,6 +320,9 @@ class SeniorState {
       currentStreak: currentStreak ?? this.currentStreak,
       startDate: startDate ?? this.startDate,
       seniorCreatedAt: seniorCreatedAt ?? this.seniorCreatedAt,
+      missedCheckInsToday: missedCheckInsToday ?? this.missedCheckInsToday,
+      lastMissedCheckIn: lastMissedCheckIn ?? this.lastMissedCheckIn,
+      nextExpectedCheckIn: nextExpectedCheckIn ?? this.nextExpectedCheckIn,
     );
   }
 }

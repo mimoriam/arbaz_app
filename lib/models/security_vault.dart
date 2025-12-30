@@ -39,6 +39,25 @@ class PetInfo {
       'specialNeeds': specialNeeds,
     };
   }
+
+  /// Creates a copy with updated values
+  PetInfo copyWith({
+    String? name,
+    String? type,
+    String? medications,
+    String? vetNamePhone,
+    String? foodInstructions,
+    String? specialNeeds,
+  }) {
+    return PetInfo(
+      name: name ?? this.name,
+      type: type ?? this.type,
+      medications: medications ?? this.medications,
+      vetNamePhone: vetNamePhone ?? this.vetNamePhone,
+      foodInstructions: foodInstructions ?? this.foodInstructions,
+      specialNeeds: specialNeeds ?? this.specialNeeds,
+    );
+  }
 }
 
 /// Model for the security vault containing sensitive information
@@ -126,5 +145,36 @@ class SecurityVault {
       'otherNotes': otherNotes,
       'updatedAt': lastUpdated != null ? Timestamp.fromDate(lastUpdated) : Timestamp.now(),
     };
+  }
+
+  /// Creates a copy with updated values
+  SecurityVault copyWith({
+    String? homeAddress,
+    String? buildingEntryCode,
+    String? apartmentDoorCode,
+    String? spareKeyLocation,
+    String? alarmCode,
+    List<PetInfo>? pets,
+    String? doctorNamePhone,
+    String? medicationsList,
+    String? allergies,
+    String? medicalConditions,
+    String? otherNotes,
+    DateTime? updatedAt,
+  }) {
+    return SecurityVault(
+      homeAddress: homeAddress ?? this.homeAddress,
+      buildingEntryCode: buildingEntryCode ?? this.buildingEntryCode,
+      apartmentDoorCode: apartmentDoorCode ?? this.apartmentDoorCode,
+      spareKeyLocation: spareKeyLocation ?? this.spareKeyLocation,
+      alarmCode: alarmCode ?? this.alarmCode,
+      pets: pets ?? this.pets,
+      doctorNamePhone: doctorNamePhone ?? this.doctorNamePhone,
+      medicationsList: medicationsList ?? this.medicationsList,
+      allergies: allergies ?? this.allergies,
+      medicalConditions: medicalConditions ?? this.medicalConditions,
+      otherNotes: otherNotes ?? this.otherNotes,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
   }
 }

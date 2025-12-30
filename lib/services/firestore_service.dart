@@ -5,6 +5,9 @@ import '../models/connection_model.dart';
 import '../models/checkin_model.dart';
 import '../models/game_result.dart';
 import '../models/security_vault.dart';
+import '../models/activity_log.dart';
+import '../utils/constants.dart';
+import '../utils/timezone_helper.dart';
 
 /// Explicit streak state for clear state transitions
 enum StreakState {
@@ -22,6 +25,153 @@ StreakState calculateStreakState(DateTime last, DateTime now) {
   if (diff == 0) return StreakState.sameDay;
   if (diff == 1) return StreakState.consecutive;
   return StreakState.broken;
+}
+
+/// Parse a schedule time string (e.g., "11:00 AM") into hours and minutes
+({int hours, int minutes})? _parseScheduleTime(String schedule) {
+  try {
+    String normalized = schedule.trim().toUpperCase().replaceAll(RegExp(r'\s+'), ' ');
+    // Handle "9:00AM" -> "9:00 AM"
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'(\d)(AM|PM)$'),
+      (m) => '${m[1]} ${m[2]}',
+    );
+    
+    final parts = normalized.split(' ');
+    if (parts.length != 2) return null;
+    
+    final timePart = parts[0];
+    final period = parts[1];
+    if (period != 'AM' && period != 'PM') return null;
+    
+    final timeParts = timePart.split(':');
+    if (timeParts.length != 2) return null;
+    
+    int hours = int.tryParse(timeParts[0]) ?? -1;
+    final minutes = int.tryParse(timeParts[1]) ?? -1;
+    
+    if (hours < 1 || hours > 12 || minutes < 0 || minutes > 59) return null;
+    
+    // Convert to 24-hour
+    if (period == 'PM' && hours != 12) hours += 12;
+    if (period == 'AM' && hours == 12) hours = 0;
+    
+    return (hours: hours, minutes: minutes);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Calculate the next expected check-in time based on schedules
+/// Returns null if vacation mode should skip (no schedules)
+/// 
+/// If [timezone] is provided, uses timezone-aware same-day detection.
+/// Otherwise falls back to local time comparison.
+DateTime? calculateNextExpectedCheckIn(
+  List<String> schedules,
+  DateTime now,
+  DateTime? lastCheckIn, {
+  String? timezone,
+}) {
+  final effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
+  
+  // Check if already checked in today (timezone-aware if timezone provided)
+  bool checkedInToday;
+  if (timezone != null && lastCheckIn != null) {
+    checkedInToday = TimezoneHelper.isSameDay(lastCheckIn, now, timezone);
+  } else {
+    checkedInToday = lastCheckIn != null &&
+        lastCheckIn.year == now.year &&
+        lastCheckIn.month == now.month &&
+        lastCheckIn.day == now.day;
+  }
+  
+  if (checkedInToday) {
+    // Find earliest schedule tomorrow
+    DateTime? earliest;
+    final tomorrow = DateTime(now.year, now.month, now.day + 1);
+    
+    for (final schedule in effectiveSchedules) {
+      final parsed = _parseScheduleTime(schedule);
+      if (parsed == null) continue;
+      
+      final scheduleTime = DateTime(
+        tomorrow.year, tomorrow.month, tomorrow.day,
+        parsed.hours, parsed.minutes,
+      );
+      
+      if (earliest == null || scheduleTime.isBefore(earliest)) {
+        earliest = scheduleTime;
+      }
+    }
+    return earliest;
+  }
+  
+  // Not checked in today - find next upcoming schedule today or tomorrow
+  DateTime? nextToday;
+  DateTime? earliestTomorrow;
+  
+  for (final schedule in effectiveSchedules) {
+    final parsed = _parseScheduleTime(schedule);
+    if (parsed == null) continue;
+    
+    // Today's schedule
+    final todayTime = DateTime(
+      now.year, now.month, now.day,
+      parsed.hours, parsed.minutes,
+    );
+    
+    if (todayTime.isAfter(now)) {
+      if (nextToday == null || todayTime.isBefore(nextToday)) {
+        nextToday = todayTime;
+      }
+    }
+    
+    // Tomorrow's schedule
+    final tomorrowTime = DateTime(
+      now.year, now.month, now.day + 1,
+      parsed.hours, parsed.minutes,
+    );
+    
+    if (earliestTomorrow == null || tomorrowTime.isBefore(earliestTomorrow)) {
+      earliestTomorrow = tomorrowTime;
+    }
+  }
+  
+  return nextToday ?? earliestTomorrow;
+}
+
+/// Retry a Future with exponential backoff for transient failures
+/// Useful for critical Firestore operations that may fail due to network issues
+Future<T> retryWithBackoff<T>(
+  Future<T> Function() operation, {
+  int maxAttempts = 3,
+  Duration initialDelay = const Duration(milliseconds: 500),
+}) async {
+  Duration delay = initialDelay;
+  
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await operation();
+    } catch (e) {
+      // Don't retry on the last attempt
+      if (attempt == maxAttempts) rethrow;
+      
+      // For Firestore exceptions, only retry on transient errors
+      final errorMessage = e.toString().toLowerCase();
+      final isTransient = errorMessage.contains('unavailable') ||
+          errorMessage.contains('deadline') ||
+          errorMessage.contains('timeout') ||
+          errorMessage.contains('network');
+      
+      if (!isTransient) rethrow;
+      
+      // Wait with exponential backoff before retrying
+      await Future.delayed(delay);
+      delay *= 2; // Exponential backoff
+    }
+  }
+  throw StateError('Retry logic should not reach here');
 }
 
 /// Firestore operations with subcollection structure
@@ -53,6 +203,9 @@ class FirestoreService {
 
   DocumentReference _securityVaultRef(String uid) =>
       _db.collection('users').doc(uid).collection('data').doc('securityVault');
+
+  CollectionReference _activityLogsRef(String uid) =>
+      _db.collection('users').doc(uid).collection('activityLogs');
 
   CollectionReference get _connectionsRef => _db.collection('connections');
 
@@ -126,11 +279,17 @@ class FirestoreService {
       'hasConfirmedSeniorRole': true,
     }, SetOptions(merge: true));
     
-    // Set seniorCreatedAt if not already set (for day 1 check-in logic)
+    // Set seniorCreatedAt and nextExpectedCheckIn if not already set
     final seniorState = await getSeniorState(uid);
     if (seniorState == null || seniorState.seniorCreatedAt == null) {
+      final now = DateTime.now();
+      final defaultSchedules = ['11:00 AM'];
+      final nextExpected = calculateNextExpectedCheckIn(defaultSchedules, now, null);
+      
       await _seniorStateRef(uid).set({
         'seniorCreatedAt': Timestamp.now(),
+        'checkInSchedules': defaultSchedules,
+        if (nextExpected != null) 'nextExpectedCheckIn': Timestamp.fromDate(nextExpected),
       }, SetOptions(merge: true));
     }
   }
@@ -172,9 +331,24 @@ class FirestoreService {
   }
 
   Future<void> updateVacationMode(String uid, bool isEnabled) async {
-    await _seniorStateRef(uid).set({
-      'vacationMode': isEnabled,
-    }, SetOptions(merge: true));
+    if (isEnabled) {
+      // Vacation ON - clear nextExpectedCheckIn to prevent false alerts
+      await _seniorStateRef(uid).set({
+        'vacationMode': true,
+        'nextExpectedCheckIn': FieldValue.delete(),
+      }, SetOptions(merge: true));
+    } else {
+      // Vacation OFF - recalculate nextExpectedCheckIn
+      final seniorState = await getSeniorState(uid);
+      final schedules = seniorState?.checkInSchedules ?? ['11:00 AM'];
+      final lastCheckIn = seniorState?.lastCheckIn;
+      final nextExpected = calculateNextExpectedCheckIn(schedules, DateTime.now(), lastCheckIn);
+      
+      await _seniorStateRef(uid).set({
+        'vacationMode': false,
+        if (nextExpected != null) 'nextExpectedCheckIn': Timestamp.fromDate(nextExpected),
+      }, SetOptions(merge: true));
+    }
   }
 
   /// Stream senior state for real-time updates (avoids polling)
@@ -204,17 +378,71 @@ class FirestoreService {
     }, SetOptions(merge: true));
   }
 
-  /// Atomically adds a schedule time using FieldValue.arrayUnion
+  /// Atomically adds a schedule time using a transaction to prevent race conditions
+  /// Also recalculates nextExpectedCheckIn to keep Cloud Functions in sync
   Future<void> atomicAddSchedule(String uid, String time) async {
-    await _seniorStateRef(uid).set({
-      'checkInSchedules': FieldValue.arrayUnion([time]),
-    }, SetOptions(merge: true));
+    await _db.runTransaction((transaction) async {
+      final seniorStateDoc = await transaction.get(_seniorStateRef(uid));
+      
+      List<String> currentSchedules = AppConstants.defaultSchedules;
+      DateTime? lastCheckIn;
+      
+      if (seniorStateDoc.exists) {
+        final data = seniorStateDoc.data() as Map<String, dynamic>?;
+        if (data != null) {
+          if (data['checkInSchedules'] is List) {
+            currentSchedules = (data['checkInSchedules'] as List)
+                .map((e) => e.toString())
+                .toList();
+          }
+          if (data['lastCheckIn'] is Timestamp) {
+            lastCheckIn = (data['lastCheckIn'] as Timestamp).toDate();
+          }
+        }
+      }
+      
+      // Add new time and calculate next expected
+      final updatedSchedules = [...currentSchedules, time];
+      final nextExpected = calculateNextExpectedCheckIn(updatedSchedules, DateTime.now(), lastCheckIn);
+      
+      transaction.set(_seniorStateRef(uid), {
+        'checkInSchedules': FieldValue.arrayUnion([time]),
+        if (nextExpected != null) 'nextExpectedCheckIn': Timestamp.fromDate(nextExpected),
+      }, SetOptions(merge: true));
+    });
   }
 
-  /// Atomically removes a schedule time using FieldValue.arrayRemove
+  /// Atomically removes a schedule time using a transaction to prevent race conditions
+  /// Also recalculates nextExpectedCheckIn to keep Cloud Functions in sync
   Future<void> atomicRemoveSchedule(String uid, String time) async {
-    await _seniorStateRef(uid).update({
-      'checkInSchedules': FieldValue.arrayRemove([time]),
+    await _db.runTransaction((transaction) async {
+      final seniorStateDoc = await transaction.get(_seniorStateRef(uid));
+      
+      List<String> currentSchedules = AppConstants.defaultSchedules;
+      DateTime? lastCheckIn;
+      
+      if (seniorStateDoc.exists) {
+        final data = seniorStateDoc.data() as Map<String, dynamic>?;
+        if (data != null) {
+          if (data['checkInSchedules'] is List) {
+            currentSchedules = (data['checkInSchedules'] as List)
+                .map((e) => e.toString())
+                .toList();
+          }
+          if (data['lastCheckIn'] is Timestamp) {
+            lastCheckIn = (data['lastCheckIn'] as Timestamp).toDate();
+          }
+        }
+      }
+      
+      // Remove time and calculate next expected
+      final updatedSchedules = currentSchedules.where((s) => s != time).toList();
+      final nextExpected = calculateNextExpectedCheckIn(updatedSchedules, DateTime.now(), lastCheckIn);
+      
+      transaction.set(_seniorStateRef(uid), {
+        'checkInSchedules': FieldValue.arrayRemove([time]),
+        if (nextExpected != null) 'nextExpectedCheckIn': Timestamp.fromDate(nextExpected),
+      }, SetOptions(merge: true));
     });
   }
 
@@ -295,11 +523,31 @@ class FirestoreService {
       final checkInDocRef = _checkInsRef(uid).doc();
       transaction.set(checkInDocRef, record.toFirestore());
       
-      // 3. Update senior state with streak info
+      // 3. Update senior state with streak info and nextExpectedCheckIn
+      // Get schedules for nextExpectedCheckIn calculation
+      List<String> schedules = ['11:00 AM'];
+      if (seniorStateDoc.exists) {
+        final rawData = seniorStateDoc.data();
+        if (rawData != null && rawData is Map<String, dynamic>) {
+          final data = rawData;
+          if (data['checkInSchedules'] is List) {
+            schedules = (data['checkInSchedules'] as List)
+                .map((e) => e.toString())
+                .toList();
+          }
+        }
+      }
+      final nextExpected = calculateNextExpectedCheckIn(
+        schedules,
+        DateTime.now(),
+        record.timestamp,
+      );
+      
       transaction.set(seniorStateRef, {
         'lastCheckIn': Timestamp.fromDate(record.timestamp),
         'currentStreak': newStreak,
         'startDate': Timestamp.fromDate(startDate),
+        if (nextExpected != null) 'nextExpectedCheckIn': Timestamp.fromDate(nextExpected),
       }, SetOptions(merge: true));
       
       // 4. If location info is present, update user profile location
@@ -435,6 +683,116 @@ class FirestoreService {
     return getSecurityVault(seniorUid);
   }
 
+  // ===== Activity Log Operations =====
+
+  /// Log an activity for a senior
+  Future<void> logActivity(String seniorId, ActivityLog activity) async {
+    await _activityLogsRef(seniorId).add(activity.toFirestore());
+  }
+
+  /// Stream recent activities for a senior (for family dashboard)
+  Stream<List<ActivityLog>> streamActivities(String seniorId, {int limit = 20}) {
+    if (seniorId.isEmpty) return Stream.value([]);
+    return _activityLogsRef(seniorId)
+        .orderBy('timestamp', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((snap) => snap.docs.map((d) => ActivityLog.fromFirestore(d)).toList());
+  }
+
+  /// Get activities for a specific date
+  Future<List<ActivityLog>> getActivitiesForDate(String seniorId, DateTime date) async {
+    if (seniorId.isEmpty) return [];
+    final startOfDay = DateTime(date.year, date.month, date.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+    
+    final snap = await _activityLogsRef(seniorId)
+        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('timestamp', isLessThan: Timestamp.fromDate(endOfDay))
+        .orderBy('timestamp', descending: true)
+        .get();
+    
+    return snap.docs.map((d) => ActivityLog.fromFirestore(d)).toList();
+  }
+
+  /// Stream alerts only (missed check-ins) for family dashboard
+  Stream<List<ActivityLog>> streamAlerts(String seniorId, {int limit = 20}) {
+    if (seniorId.isEmpty) return Stream.value([]);
+    return _activityLogsRef(seniorId)
+        .where('isAlert', isEqualTo: true)
+        .orderBy('timestamp', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((snap) => snap.docs.map((d) => ActivityLog.fromFirestore(d)).toList());
+  }
+
+  /// Get activities for multiple seniors (for family dashboard overview)
+  /// Uses Future.wait for parallel fetches instead of sequential N+1 queries
+  Future<List<ActivityLog>> getActivitiesForSeniors(
+    List<String> seniorIds, {
+    int limitPerSenior = 10,
+  }) async {
+    if (seniorIds.isEmpty) return [];
+    
+    // Parallel fetch with error handling - failed fetches return empty list
+    final futures = seniorIds.map((seniorId) async {
+      try {
+        final snap = await _activityLogsRef(seniorId)
+            .orderBy('timestamp', descending: true)
+            .limit(limitPerSenior)
+            .get();
+        return snap.docs
+            .map((d) => ActivityLog.tryFromFirestore(d))
+            .whereType<ActivityLog>()
+            .toList();
+      } catch (e) {
+        return <ActivityLog>[]; // Graceful degradation for individual senior
+      }
+    });
+    
+    final results = await Future.wait(futures);
+    
+    // Flatten and sort combined results by timestamp
+    final allActivities = results.expand((list) => list).toList();
+    allActivities.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    
+    return allActivities;
+  }
+
+  /// Get alerts for multiple seniors (for family dashboard alerts tab)
+  /// Uses Future.wait for parallel fetches instead of sequential N+1 queries
+  Future<List<ActivityLog>> getAlertsForSeniors(
+    List<String> seniorIds, {
+    int limitPerSenior = 10,
+  }) async {
+    if (seniorIds.isEmpty) return [];
+    
+    // Parallel fetch with error handling - failed fetches return empty list
+    final futures = seniorIds.map((seniorId) async {
+      try {
+        final snap = await _activityLogsRef(seniorId)
+            .where('isAlert', isEqualTo: true)
+            .orderBy('timestamp', descending: true)
+            .limit(limitPerSenior)
+            .get();
+        return snap.docs
+            .map((d) => ActivityLog.tryFromFirestore(d))
+            .whereType<ActivityLog>()
+            .toList();
+      } catch (e) {
+        return <ActivityLog>[]; // Graceful degradation for individual senior
+      }
+    });
+    
+    final results = await Future.wait(futures);
+    
+    // Flatten and sort combined results by timestamp
+    final allAlerts = results.expand((list) => list).toList();
+    allAlerts.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    
+    return allAlerts;
+  }
+
   // ===== Connections (Top-level, UIDs only) =====
 
   Future<void> createConnection(Connection connection) async {
@@ -464,20 +822,41 @@ class FirestoreService {
   }
 
   /// Fetch multiple profiles by UID (for displaying connection names)
+  /// Uses whereIn for batch fetching instead of individual document reads
   Future<Map<String, UserProfile>> getProfilesByUids(List<String> uids) async {
     if (uids.isEmpty) return {};
 
     final profiles = <String, UserProfile>{};
 
-    // Firestore 'in' queries limited to 30 items
-    for (var i = 0; i < uids.length; i += 30) {
-      final batch = uids.skip(i).take(30).toList();
-      final futures = batch.map((uid) => getUserProfile(uid));
-      final results = await Future.wait(futures);
-
-      for (var j = 0; j < batch.length; j++) {
-        if (results[j] != null) {
-          profiles[batch[j]] = results[j]!;
+    // Firestore 'whereIn' queries limited to 30 items
+    for (var i = 0; i < uids.length; i += AppConstants.firestoreWhereInLimit) {
+      final batch = uids.skip(i).take(AppConstants.firestoreWhereInLimit).toList();
+      
+      try {
+        // Single query to fetch all profiles in batch
+        final snapshot = await _db.collection('users')
+            .where(FieldPath.documentId, whereIn: batch)
+            .get();
+        
+        // For each user document, fetch the profile subcollection
+        for (final userDoc in snapshot.docs) {
+          try {
+            final profileDoc = await _profileRef(userDoc.id).get();
+            if (profileDoc.exists) {
+              profiles[userDoc.id] = UserProfile.fromFirestore(profileDoc);
+            }
+          } catch (e) {
+            // Skip profiles that fail to parse
+          }
+        }
+      } catch (e) {
+        // Fallback to individual fetches if batch query fails
+        final futures = batch.map((uid) => getUserProfile(uid));
+        final results = await Future.wait(futures);
+        for (var j = 0; j < batch.length; j++) {
+          if (results[j] != null) {
+            profiles[batch[j]] = results[j]!;
+          }
         }
       }
     }
@@ -553,15 +932,28 @@ class FirestoreService {
         transaction.delete(connectionRefToDelete);
       }
 
-      // Remove from current user's contacts
-      transaction.delete(
-          _db.collection('users').doc(currentUid).collection('familyContacts').doc(contactUid)
-      );
+      // Define contact refs
+      final currentUserContactRef = _db
+          .collection('users')
+          .doc(currentUid)
+          .collection('familyContacts')
+          .doc(contactUid);
+      final otherUserContactRef = _db
+          .collection('users')
+          .doc(contactUid)
+          .collection('familyContacts')
+          .doc(currentUid);
 
-      // Remove from the other user's contacts
-      transaction.delete(
-          _db.collection('users').doc(contactUid).collection('familyContacts').doc(currentUid)
-      );
+      // Check existence before deleting to prevent errors on non-existent docs
+      final currentContactDoc = await transaction.get(currentUserContactRef);
+      final otherContactDoc = await transaction.get(otherUserContactRef);
+
+      if (currentContactDoc.exists) {
+        transaction.delete(currentUserContactRef);
+      }
+      if (otherContactDoc.exists) {
+        transaction.delete(otherUserContactRef);
+      }
     });
   }
 
@@ -609,10 +1001,12 @@ class FirestoreService {
         return; // Already connected, nothing to do
       }
       // 1. Create connection document
+      final seniorName = invitedUserRole == 'Senior' ? invitedUserName : currentUserName;
       transaction.set(_connectionsRef.doc(connectionId), {
         'id': connectionId,
         'seniorId': seniorId,
         'familyId': familyId,
+        'seniorName': seniorName, // Store name for dashboard fallback
         'status': 'active',
         'createdAt': Timestamp.now(),
       });

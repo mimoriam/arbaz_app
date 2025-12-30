@@ -209,23 +209,35 @@ class CheckInScheduleProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> removeSchedule(String time) async {
+  Future<bool> removeSchedule(String time) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) return false;
 
+    // Prevent removing the last schedule - at least one must remain
+    // (Cloud Functions default to 11:00 AM anyway, so this prevents confusing UX)
+    if (_schedules.length == 1) {
+      _error = "At least one schedule must remain";
+      notifyListeners();
+      return false;
+    }
+    
     if (_schedules.contains(time)) {
       // Optimistic update
       _schedules.remove(time);
+      _error = null; // Clear any previous error
       notifyListeners();
 
       try {
         await _scheduleService.removeSchedule(user.uid, time);
+        return true;
       } catch (e) {
         _error = e.toString();
         // Revert
         await _loadSchedules(user.uid);
         debugPrint('Error removing schedule: $e');
+        return false;
       }
     }
+    return false;
   }
 }
