@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_model.dart';
 import '../models/connection_model.dart';
 import '../models/checkin_model.dart';
+import '../models/game_result.dart';
+import '../models/security_vault.dart';
 
 /// Explicit streak state for clear state transitions
 enum StreakState {
@@ -45,6 +47,12 @@ class FirestoreService {
 
   CollectionReference _requestsRef(String uid) =>
       _db.collection('users').doc(uid).collection('requests');
+
+  CollectionReference _gameResultsRef(String uid) =>
+      _db.collection('users').doc(uid).collection('gameResults');
+
+  DocumentReference _securityVaultRef(String uid) =>
+      _db.collection('users').doc(uid).collection('data').doc('securityVault');
 
   CollectionReference get _connectionsRef => _db.collection('connections');
 
@@ -117,6 +125,14 @@ class FirestoreService {
       'isSenior': true,
       'hasConfirmedSeniorRole': true,
     }, SetOptions(merge: true));
+    
+    // Set seniorCreatedAt if not already set (for day 1 check-in logic)
+    final seniorState = await getSeniorState(uid);
+    if (seniorState == null || seniorState.seniorCreatedAt == null) {
+      await _seniorStateRef(uid).set({
+        'seniorCreatedAt': Timestamp.now(),
+      }, SetOptions(merge: true));
+    }
   }
 
   Future<void> setAsFamilyMember(String uid) async {
@@ -153,6 +169,12 @@ class FirestoreService {
 
   Future<void> updateSeniorState(String uid, SeniorState state) async {
     await _seniorStateRef(uid).set(state.toFirestore(), SetOptions(merge: true));
+  }
+
+  Future<void> updateVacationMode(String uid, bool isEnabled) async {
+    await _seniorStateRef(uid).set({
+      'vacationMode': isEnabled,
+    }, SetOptions(merge: true));
   }
 
   /// Stream senior state for real-time updates (avoids polling)
@@ -329,6 +351,52 @@ class FirestoreService {
       return []; // Graceful degradation
     }
   }
+
+  // ===== Game Results Operations =====
+
+  /// Saves a game result to the user's gameResults subcollection
+  Future<void> saveGameResult(String uid, GameResult result) async {
+    await _gameResultsRef(uid).add(result.toFirestore());
+  }
+
+  /// Gets game results for a user, optionally limited and filtered by month
+  Future<List<GameResult>> getGameResults(String uid, {int? limit, int? year, int? month}) async {
+    if (uid.isEmpty) return [];
+    try {
+      Query query = _gameResultsRef(uid);
+      
+      // Add date range filter if year and month specified
+      if (year != null && month != null) {
+        final start = DateTime(year, month, 1);
+        final endYear = month == 12 ? year + 1 : year;
+        final endMonth = month == 12 ? 1 : month + 1;
+        final end = DateTime(endYear, endMonth, 1);
+        
+        query = query
+            .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+            .where('timestamp', isLessThan: Timestamp.fromDate(end));
+      }
+      
+      query = query.orderBy('timestamp', descending: true);
+      
+      if (limit != null) {
+        query = query.limit(limit);
+      }
+      
+      final snapshot = await query.get();
+      return snapshot.docs
+          .map((d) => GameResult.fromFirestore(d))
+          .toList();
+    } catch (e) {
+      return []; // Graceful degradation
+    }
+  }
+
+  /// Gets game results for a senior (for family health view)
+  /// Returns results for cognitive index calculation, optionally filtered by month
+  Future<List<GameResult>> getGameResultsForSenior(String seniorUid, {int? year, int? month}) async {
+    return getGameResults(seniorUid, year: year, month: month);
+  }
   
   // ===== Progressive Profile =====
 
@@ -346,6 +414,25 @@ class FirestoreService {
       {'emergencyContact': contact.toMap()},
       SetOptions(merge: true),
     );
+  }
+
+  // ===== Security Vault Operations =====
+
+  /// Gets the security vault for a user
+  Future<SecurityVault?> getSecurityVault(String uid) async {
+    final doc = await _securityVaultRef(uid).get();
+    if (!doc.exists) return null;
+    return SecurityVault.fromFirestore(doc);
+  }
+
+  /// Saves/updates the security vault for a user
+  Future<void> saveSecurityVault(String uid, SecurityVault vault) async {
+    await _securityVaultRef(uid).set(vault.toFirestore());
+  }
+
+  /// Gets the security vault for a connected senior (for family members)
+  Future<SecurityVault?> getSecurityVaultForSenior(String seniorUid) async {
+    return getSecurityVault(seniorUid);
   }
 
   // ===== Connections (Top-level, UIDs only) =====

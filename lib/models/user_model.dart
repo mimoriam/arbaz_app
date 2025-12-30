@@ -193,6 +193,7 @@ class SeniorState {
   final bool escalationAlarmActive;
   final int currentStreak;
   final DateTime? startDate; // The date when user started using the app
+  final DateTime? seniorCreatedAt; // When user first became a senior (for day 1 logic)
 
   SeniorState({
     this.lastCheckIn,
@@ -204,6 +205,7 @@ class SeniorState {
     this.escalationAlarmActive = false,
     this.currentStreak = 0,
     this.startDate,
+    this.seniorCreatedAt,
   });
 
   factory SeniorState.fromFirestore(DocumentSnapshot doc) {
@@ -244,6 +246,9 @@ class SeniorState {
       startDate: data['startDate'] is Timestamp
           ? (data['startDate'] as Timestamp).toDate()
           : null,
+      seniorCreatedAt: data['seniorCreatedAt'] is Timestamp
+          ? (data['seniorCreatedAt'] as Timestamp).toDate()
+          : null,
     );
   }
 
@@ -260,6 +265,7 @@ class SeniorState {
       'escalationAlarmActive': escalationAlarmActive,
       'currentStreak': currentStreak,
       'startDate': startDate != null ? Timestamp.fromDate(startDate!) : null,
+      'seniorCreatedAt': seniorCreatedAt != null ? Timestamp.fromDate(seniorCreatedAt!) : null,
     };
   }
 
@@ -273,6 +279,7 @@ class SeniorState {
     bool? escalationAlarmActive,
     int? currentStreak,
     DateTime? startDate,
+    DateTime? seniorCreatedAt,
   }) {
     return SeniorState(
       lastCheckIn: lastCheckIn ?? this.lastCheckIn,
@@ -285,6 +292,7 @@ class SeniorState {
           escalationAlarmActive ?? this.escalationAlarmActive,
       currentStreak: currentStreak ?? this.currentStreak,
       startDate: startDate ?? this.startDate,
+      seniorCreatedAt: seniorCreatedAt ?? this.seniorCreatedAt,
     );
   }
 }

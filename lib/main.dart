@@ -132,7 +132,11 @@ class _AppInitializerState extends State<AppInitializer> {
 
         // Features Providers
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
-        ChangeNotifierProvider(create: (_) => VacationModeProvider()),
+        ChangeNotifierProxyProvider<FirestoreService, VacationModeProvider>(
+          create: (context) => VacationModeProvider(context.read<FirestoreService>()),
+          update: (_, firestoreService, previous) =>
+              previous ?? VacationModeProvider(firestoreService),
+        ),
         
         ChangeNotifierProxyProvider<FirestoreService, BrainGamesProvider>(
           create: (context) {

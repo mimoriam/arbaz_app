@@ -91,12 +91,14 @@ class SeniorStatusData {
   final String seniorName;
   final DateTime? lastCheckIn;
   final String? timeString; // Formatted time string, e.g. "22:13"
+  final bool vacationMode;
 
   SeniorStatusData({
     required this.status,
     required this.seniorName,
     this.lastCheckIn,
     this.timeString,
+    this.vacationMode = false,
   });
 }
 

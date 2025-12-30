@@ -23,6 +23,8 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import 'package:arbaz_app/models/wellness_data.dart';
 import 'package:arbaz_app/models/checkin_model.dart';
+import 'package:arbaz_app/models/game_result.dart';
+import 'package:arbaz_app/models/security_vault.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'package:arbaz_app/models/user_model.dart';
@@ -360,13 +362,16 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     setState(() => _activeAction = HomeAction.roleSwitch);
 
     final rolePreferenceService = context.read<RolePreferenceService>();
+    final firestoreService = context.read<FirestoreService>();
 
     try {
       // Step 1: Grant role in Firestore first
       await setRoleInFirestore(user.uid);
 
+      if (!mounted) return;
+
       // Step 2: Persist current role to Firestore for cross-session persistence
-      await context.read<FirestoreService>().updateCurrentRole(user.uid, targetRole);
+      await firestoreService.updateCurrentRole(user.uid, targetRole);
 
       // Step 3: Update local preference
       await rolePreferenceService.setActiveRole(user.uid, targetRole);
@@ -840,79 +845,78 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   }
 
   Widget _buildVacationModeCard(bool isDarkMode) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [const Color(0xFF6366F1), const Color(0xFF818CF8)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+  return Container(
+    margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        colors: [const Color(0xFF6366F1), const Color(0xFF818CF8)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: const Color(0xFF6366F1).withValues(alpha: 0.3),
+          blurRadius: 12,
+          offset: const Offset(0, 4),
         ),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF6366F1).withValues(alpha: 0.3),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
+      ],
+    ),
+    child: Row(
+      children: [
+        // Sun Icon
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.2),
+            borderRadius: BorderRadius.circular(10),
           ),
-        ],
-      ),
-      child: Row(
-        children: [
-          // Sun Icon
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(
-              Icons.wb_sunny_outlined,
-              color: Colors.white,
-              size: 24,
-            ),
+          child: const Icon(
+            Icons.wb_sunny_outlined,
+            color: Colors.white,
+            size: 20,
           ),
-          const SizedBox(width: 16),
+        ),
+        const SizedBox(width: 12),
 
-          // Text
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Vacation Mode On',
-                  style: GoogleFonts.inter(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
+        // Text
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Vacation Mode On',
+                style: GoogleFonts.inter(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  'Check-ins are paused',
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w400,
-                    color: Colors.white.withValues(alpha: 0.8),
-                  ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Check-ins are paused',
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w400,
+                  color: Colors.white.withValues(alpha: 0.8),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
+        ),
 
-          // Info Icon
-          Icon(
-            Icons.info_outline,
-            color: Colors.white.withValues(alpha: 0.9),
-            size: 24,
-          ),
-        ],
-      ),
-    );
-  }
-
+        // Info Icon
+        Icon(
+          Icons.info_outline,
+          color: Colors.white.withValues(alpha: 0.9),
+          size: 20,
+        ),
+      ],
+    ),
+  );
+}
   Widget _buildStatusButton({
     bool isVacationMode = false,
     bool isLoading = false,
@@ -1118,88 +1122,88 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
         const SizedBox(height: 16),
 
         // Message Card
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-          decoration: BoxDecoration(
-            color: isDarkMode ? AppColors.surfaceDark : Colors.white,
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(
-              color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
-            ),
-            boxShadow: isDarkMode
-                ? null
-                : [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.04),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+        decoration: BoxDecoration(
+          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
           ),
-          child: Column(
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Quote Icon or Status Dot
-                  Container(
-                    margin: const EdgeInsets.only(top: 4),
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: dotColor,
-                      boxShadow: [
-                        BoxShadow(
-                          color: dotColor.withValues(alpha: 0.4),
-                          blurRadius: 6,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-
-                  // Message Text
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          message,
-                          style: GoogleFonts.inter(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                            color: isDarkMode
-                                ? AppColors.textPrimaryDark
-                                : AppColors.textPrimary,
-                            height: 1.4,
-                            fontStyle: _hasCheckedInToday
-                                ? FontStyle.italic
-                                : FontStyle.normal,
-                          ),
-                        ),
-                        if (subMessage != null) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            subMessage,
-                            style: GoogleFonts.inter(
-                              fontSize: 13,
-                              color: isDarkMode
-                                  ? AppColors.textSecondaryDark
-                                  : AppColors.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
+          boxShadow: isDarkMode
+              ? null
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
                   ),
                 ],
-              ),
-            ],
-          ),
         ),
+        child: Column(
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Quote Icon or Status Dot
+                Container(
+                  margin: const EdgeInsets.only(top: 4),
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: dotColor,
+                    boxShadow: [
+                      BoxShadow(
+                        color: dotColor.withValues(alpha: 0.4),
+                        blurRadius: 6,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 14),
+
+                // Message Text
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        message,
+                        style: GoogleFonts.inter(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: isDarkMode
+                              ? AppColors.textPrimaryDark
+                              : AppColors.textPrimary,
+                          height: 1.4,
+                          fontStyle: _hasCheckedInToday
+                              ? FontStyle.italic
+                              : FontStyle.normal,
+                        ),
+                      ),
+                      if (subMessage != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          subMessage,
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            color: isDarkMode
+                                ? AppColors.textSecondaryDark
+                                : AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
       ],
     );
   }
@@ -1605,6 +1609,17 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   // Multi-senior support
   List<SeniorInfo> _allSeniors = []; // All connected seniors
   String? _selectedSeniorId; // Currently selected senior ID
+  
+  // Cognitive index data
+  List<GameResult> _gameResults = [];
+  CognitiveMetrics? _cognitiveMetrics;
+  
+  // Month selection for health tab
+  DateTime _selectedMonth = DateTime.now();
+  
+  // Security vault data
+  SecurityVault? _vaultData;
+  bool _showSensitiveData = false; // Toggle for showing sensitive vault data
 
   @override
   void initState() {
@@ -1918,10 +1933,6 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     } catch (e) {
       debugPrint('⚠️ Error loading check-in history: $e');
     }
-    
-    final weeklyData = history
-        .map((h) => WellnessDataPoint.fromCheckIn(h))
-        .toList();
 
     if (!mounted) return;
 
@@ -1955,20 +1966,71 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     // Cancel any existing subscription (we don't use streaming anymore for initial load)
     _seniorStateSubscription?.cancel();
 
+    // Load game results for cognitive index (filtered by selected month)
+    List<GameResult> gameResults = [];
+    try {
+      gameResults = await firestoreService.getGameResultsForSenior(
+        seniorId,
+        year: _selectedMonth.year,
+        month: _selectedMonth.month,
+      );
+      debugPrint('🔍 Found ${gameResults.length} game results for ${_selectedMonth.month}/${_selectedMonth.year}');
+    } catch (e) {
+      debugPrint('⚠️ Error loading game results: $e');
+    }
+    
+    // Load wellness data for the selected month
+    List<WellnessDataPoint> monthlyWellnessData = [];
+    try {
+      final checkIns = await firestoreService.getCheckInsForMonth(
+        seniorId,
+        _selectedMonth.year,
+        _selectedMonth.month,
+      );
+      monthlyWellnessData = checkIns
+          .map((c) => WellnessDataPoint.fromCheckIn(c))
+          .toList();
+      debugPrint('🔍 Found ${monthlyWellnessData.length} wellness data points for ${_selectedMonth.month}/${_selectedMonth.year}');
+    } catch (e) {
+      debugPrint('⚠️ Error loading monthly wellness data: $e');
+    }
+
+    // Load Security Vault data for this senior
+    SecurityVault? vaultData;
+    try {
+      vaultData = await firestoreService.getSecurityVaultForSenior(seniorId);
+      debugPrint('🔍 Vault data loaded: ${vaultData != null}');
+    } catch (e) {
+      debugPrint('⚠️ Error loading vault data: $e');
+    }
+    
+    // Load SeniorState to get vacation mode
+    SeniorState? seniorState;
+    try {
+      seniorState = await firestoreService.getSeniorState(seniorId);
+      debugPrint('🔍 Senior state loaded: ${seniorState != null}, Vacation: ${seniorState?.vacationMode}');
+    } catch (e) {
+      debugPrint('⚠️ Error loading senior state: $e');
+    }
+
     if (mounted) {
       setState(() {
-        _weeklyWellnessData = weeklyData;
+        _weeklyWellnessData = monthlyWellnessData;
         _seniorData = SeniorStatusData(
           status: status,
           seniorName: srName,
           lastCheckIn: lastCheckIn,
           timeString: timeString,
+          vacationMode: seniorState?.vacationMode ?? false,
         );
+        _gameResults = gameResults;
+        _cognitiveMetrics = CognitiveMetrics.fromResults(gameResults);
+        _vaultData = vaultData;
         _isLoadingSeniorData = false;
       });
     }
     
-    debugPrint('✅ Senior data loaded: $srName, status: $status');
+    debugPrint('✅ Senior data loaded: $srName, status: $status, games: ${gameResults.length}, vault: ${vaultData != null}');
   }
 
   /// Called when user switches to a different senior in the dropdown
@@ -1980,6 +2042,9 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       _isLoadingSeniorData = true;
       _seniorData = null;
       _weeklyWellnessData = [];
+      _gameResults = [];
+      _cognitiveMetrics = null;
+      _vaultData = null;
     });
     
     _loadSeniorDetails(seniorId);
@@ -2006,8 +2071,34 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     // Parse schedules (e.g. "11:00 AM") and compare with now
     final now = DateTime.now();
 
-    // Default to 11:00 AM if no schedules configured
-    final effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
+    // Day 1 logic: skip default 11 AM schedule for new senior accounts
+    List<String> effectiveSchedules;
+    
+    if (state.seniorCreatedAt != null) {
+      final createdDate = state.seniorCreatedAt!;
+      final isDay1 = createdDate.year == now.year &&
+          createdDate.month == now.month &&
+          createdDate.day == now.day;
+      
+      if (isDay1) {
+        // On day 1, only consider schedules that differ from default
+        // (i.e., user-added custom schedules, not the default 11:00 AM)
+        effectiveSchedules = schedules
+            .where((s) => s.toUpperCase() != '11:00 AM')
+            .toList();
+        
+        // If no custom schedules on day 1, don't show yellow (late) status
+        if (effectiveSchedules.isEmpty) {
+          return SeniorCheckInStatus.pending;
+        }
+      } else {
+        // Day 2+: use all schedules normally
+        effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
+      }
+    } else {
+      // No seniorCreatedAt set (legacy accounts) - use normal behavior
+      effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
+    }
 
     bool isLate = false;
 
@@ -2056,20 +2147,23 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     setState(() => _activeAction = HomeAction.roleSwitch);
 
     final rolePreferenceService = context.read<RolePreferenceService>();
+    final firestoreService = context.read<FirestoreService>();
 
     try {
       // Step 1: Grant role in Firestore first
       await setRoleInFirestore(user.uid);
 
+      if (!mounted) return;
+
       // Step 2: Update persisted current role for cross-device/logout persistence
-      await context.read<FirestoreService>().updateCurrentRole(user.uid, targetRole);
+      await firestoreService.updateCurrentRole(user.uid, targetRole);
 
       // Step 3: Update local preference
       await rolePreferenceService.setActiveRole(user.uid, targetRole);
 
       if (!mounted) return;
 
-      // Step 3: Navigate only after both operations succeed
+      // Step 4: Navigate only after both operations succeed
       Navigator.of(
         context,
       ).pushReplacement(MaterialPageRoute(builder: (_) => targetScreen));
@@ -2377,7 +2471,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                 await Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (context) => const SettingsScreen(),
+                    builder: (context) => const SettingsScreen(isFamilyView: true),
                   ),
                 );
                 if (mounted) {
@@ -2885,57 +2979,66 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     String subtitle;
     List<Widget> actions = [];
 
-    switch (data.status) {
-      case SeniorCheckInStatus.safe:
-        cardColor = AppColors.successGreen;
-        iconColor = Colors.white;
-        icon = Icons.check_circle;
-        title = '${data.seniorName} is Safe';
-        subtitle = data.timeString != null 
-            ? 'Last check-in at ${data.timeString}' 
-            : 'No recent check-in';
-        break;
-      case SeniorCheckInStatus.pending:
-        cardColor = const Color(0xFFFFBF00); // Amber
-        iconColor = Colors.white;
-        icon = Icons.access_time_filled;
-        title = 'Pending check-in';
-        subtitle = 'Waiting for update...';
-        break;
-      case SeniorCheckInStatus.alert:
-        cardColor = AppColors.dangerRed;
-        iconColor = Colors.white;
-        icon = Icons.warning_rounded;
-        title = 'Check-in time passed!';
-        subtitle = 'Please check on ${data.seniorName}';
-        actions = [
-          ElevatedButton.icon(
-            onPressed: () => _launchURL('tel:'), // In real app use number
-            icon: const Icon(Icons.call),
-            label: Text('Call ${data.seniorName}'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.white,
-              foregroundColor: AppColors.dangerRed,
+    // Override for Vacation Mode
+    if (data.vacationMode) {
+      cardColor = const Color(0xFF6366F1); // Indigo
+      iconColor = Colors.white;
+      icon = Icons.wb_sunny_rounded;
+      title = '${data.seniorName} is on Vacation';
+      subtitle = 'Check-ins are paused';
+    } else {
+      switch (data.status) {
+        case SeniorCheckInStatus.safe:
+          cardColor = AppColors.successGreen;
+          iconColor = Colors.white;
+          icon = Icons.check_circle;
+          title = '${data.seniorName} is Safe';
+          subtitle = data.timeString != null 
+              ? 'Last check-in at ${data.timeString}' 
+              : 'No recent check-in';
+          break;
+        case SeniorCheckInStatus.pending:
+          cardColor = const Color(0xFFFFBF00); // Amber
+          iconColor = Colors.white;
+          icon = Icons.access_time_filled;
+          title = 'Pending check-in';
+          subtitle = 'Waiting for update...';
+          break;
+        case SeniorCheckInStatus.alert:
+          cardColor = AppColors.dangerRed;
+          iconColor = Colors.white;
+          icon = Icons.warning_rounded;
+          title = 'Check-in time passed!';
+          subtitle = 'Please check on ${data.seniorName}';
+          actions = [
+            ElevatedButton.icon(
+              onPressed: () => _launchURL('tel:'), // In real app use number
+              icon: const Icon(Icons.call),
+              label: Text('Call ${data.seniorName}'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: AppColors.dangerRed,
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Notifications to others sent (Placeholder)'),
-                ),
-              );
-            },
-            icon: const Icon(Icons.notifications_active),
-            label: const Text('Notify Others'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.white,
-              side: const BorderSide(color: Colors.white),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Notifications to others sent (Placeholder)'),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.notifications_active),
+              label: const Text('Notify Others'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: const BorderSide(color: Colors.white),
+              ),
             ),
-          ),
-        ];
-        break;
+          ];
+          break;
+      }
     }
 
     return Container(
@@ -3196,14 +3299,97 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       padding: const EdgeInsets.all(20),
       child: Column(
         children: [
-          const SizedBox(height: 8),
+          // Month Selector
+          _buildMonthSelector(isDarkMode),
+          
+          const SizedBox(height: 16),
 
           // Wellness Index Graph
           _buildWellnessIndexGraph(_weeklyWellnessData, isDarkMode),
 
           const SizedBox(height: 16),
-          // Cognitive Performance Card (Keep existing)
+          // Cognitive Performance Card
           _buildCognitivePerformanceCard(isDarkMode),
+        ],
+      ),
+    );
+  }
+
+  /// Handles month selection change - reloads data for new month
+  void _onMonthChanged(int delta) {
+    final newMonth = DateTime(_selectedMonth.year, _selectedMonth.month + delta, 1);
+    
+    // Don't allow future months
+    final now = DateTime.now();
+    if (newMonth.year > now.year || 
+        (newMonth.year == now.year && newMonth.month > now.month)) {
+      return;
+    }
+    
+    setState(() {
+      _selectedMonth = newMonth;
+      _isLoadingSeniorData = true;
+      _weeklyWellnessData = [];
+      _gameResults = [];
+      _cognitiveMetrics = null;
+    });
+    
+    if (_selectedSeniorId != null) {
+      _loadSeniorDetails(_selectedSeniorId!);
+    }
+  }
+
+  /// Builds the month selector UI
+  Widget _buildMonthSelector(bool isDarkMode) {
+    final now = DateTime.now();
+    final isCurrentMonth = _selectedMonth.year == now.year && 
+        _selectedMonth.month == now.month;
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.backgroundDark : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Previous Month Button
+          IconButton(
+            onPressed: () => _onMonthChanged(-1),
+            icon: Icon(
+              Icons.chevron_left,
+              color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+            ),
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            padding: EdgeInsets.zero,
+          ),
+          
+          // Month/Year Display
+          Text(
+            DateFormat('MMMM yyyy').format(_selectedMonth),
+            style: GoogleFonts.inter(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+            ),
+          ),
+          
+          // Next Month Button (disabled if current month)
+          IconButton(
+            onPressed: isCurrentMonth ? null : () => _onMonthChanged(1),
+            icon: Icon(
+              Icons.chevron_right,
+              color: isCurrentMonth 
+                  ? (isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary).withValues(alpha: 0.3)
+                  : (isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary),
+            ),
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            padding: EdgeInsets.zero,
+          ),
         ],
       ),
     );
@@ -3328,10 +3514,9 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   }
 
   Widget _buildCognitivePerformanceCard(bool isDarkMode) {
-    // TODO: Replace with actual cognitive data when available
-    // Require minimum 5 data points for meaningful chart (same as wellness)
+    // Use actual game results data (now fetched in _loadSeniorDetails)
     const int minDataPoints = 5;
-    final cognitiveDataCount = 0; // Will be replaced with actual data length
+    final cognitiveDataCount = _gameResults.length;
     
     if (cognitiveDataCount == 0) {
       return _buildHealthPlaceholderCard(
@@ -3349,6 +3534,24 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
         title: 'Building Cognitive Index',
         subtitle: '${minDataPoints - cognitiveDataCount} more games needed to display the cognitive chart.',
       );
+    }
+    
+    // Get cognitive metrics from calculated values
+    final metrics = _cognitiveMetrics ?? CognitiveMetrics.fromResults(_gameResults);
+    
+    // Determine trend color and message
+    Color trendColor;
+    String trendMessage;
+    switch (metrics.trend) {
+      case 'improving':
+        trendColor = AppColors.successGreen;
+        trendMessage = 'Overall performance trending positive ↑';
+      case 'declining':
+        trendColor = AppColors.warningOrange;
+        trendMessage = 'Performance may need attention ↓';
+      default:
+        trendColor = AppColors.primaryBlue;
+        trendMessage = 'Performance is stable →';
     }
     
     return Container(
@@ -3380,34 +3583,50 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                 ),
               ),
               const SizedBox(width: 12),
-              Text(
-                'Cognitive Performance',
-                style: GoogleFonts.inter(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
-                  color: isDarkMode
-                      ? AppColors.textPrimaryDark
-                      : AppColors.textPrimary,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Cognitive Performance',
+                      style: GoogleFonts.inter(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        color: isDarkMode
+                            ? AppColors.textPrimaryDark
+                            : AppColors.textPrimary,
+                      ),
+                    ),
+                    Text(
+                      '${metrics.gamesPlayed} games played',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: isDarkMode
+                            ? AppColors.textSecondaryDark
+                            : AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
           const SizedBox(height: 20),
 
-          // Performance Metrics
-          _buildPerformanceMetric('Memory Recall', 0.85, isDarkMode),
+          // Performance Metrics - using real calculated values
+          _buildPerformanceMetric('Memory Recall', metrics.memoryRecall, isDarkMode),
           const SizedBox(height: 12),
-          _buildPerformanceMetric('Reaction Speed', 0.92, isDarkMode),
+          _buildPerformanceMetric('Reaction Speed', metrics.reactionSpeed, isDarkMode),
           const SizedBox(height: 12),
-          _buildPerformanceMetric('Focus Duration', 0.78, isDarkMode),
+          _buildPerformanceMetric('Overall Score', metrics.overallScore, isDarkMode),
 
           const SizedBox(height: 16),
           Center(
             child: Text(
-              'Overall stability trending positive',
+              trendMessage,
               style: GoogleFonts.inter(
                 fontSize: 12,
-                color: AppColors.successGreen,
+                color: trendColor,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -3522,6 +3741,47 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
 
   // ==================== VAULT TAB ====================
   Widget _buildVaultTab(bool isDarkMode) {
+    if (_isLoadingSeniorData) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    
+    // No vault data yet
+    if (_vaultData == null) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            const SizedBox(height: 40),
+            Icon(
+              Icons.lock_outline,
+              size: 64,
+              color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No Vault Data',
+              style: GoogleFonts.inter(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'The senior has not set up their security vault yet.',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final vault = _vaultData!;
+    
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -3535,17 +3795,30 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           _buildHomeAccessCard(isDarkMode),
           const SizedBox(height: 24),
 
-          // Primary Doctor Section
-          _buildVaultSectionTitle('PRIMARY DOCTOR', isDarkMode),
+          // Pet Care Section (if any pets)
+          if (vault.pets.isNotEmpty) ...[
+            _buildVaultSectionTitle('PET CARE (${vault.pets.length})', isDarkMode),
+            const SizedBox(height: 12),
+            ...vault.pets.map((pet) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _buildPetCard(pet, isDarkMode),
+            )),
+            const SizedBox(height: 12),
+          ],
+
+          // Medical Info Section
+          _buildVaultSectionTitle('MEDICAL INFO', isDarkMode),
           const SizedBox(height: 12),
-          _buildEmptyStateCard('Not specified', isDarkMode),
+          _buildMedicalInfoCard(isDarkMode),
           const SizedBox(height: 24),
 
-          // Medical Notes Section
-          _buildVaultSectionTitle('MEDICAL NOTES', isDarkMode),
-          const SizedBox(height: 12),
-          _buildEmptyStateCard('None listed', isDarkMode),
-          const SizedBox(height: 40),
+          // Other Notes Section
+          if (vault.otherNotes != null && vault.otherNotes!.isNotEmpty) ...[
+            _buildVaultSectionTitle('OTHER NOTES', isDarkMode),
+            const SizedBox(height: 12),
+            _buildEmptyStateCard(vault.otherNotes!, isDarkMode),
+            const SizedBox(height: 24),
+          ],
 
           // Privacy Notice
           Center(
@@ -3619,43 +3892,230 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           ),
         ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.home, color: Colors.white, size: 24),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'No address set',
+          // Header row
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.home, color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  _vaultData?.homeAddress ?? 'No address set',
                   style: GoogleFonts.inter(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
                     color: Colors.white,
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Code: N/A',
-                  style: GoogleFonts.inter(
-                    fontSize: 13,
-                    color: Colors.white.withValues(alpha: 0.8),
-                  ),
+              ),
+            ],
+          ),
+          
+          // Details
+          if (_vaultData != null) ...[
+            const SizedBox(height: 16),
+            if (_vaultData!.buildingEntryCode != null && _vaultData!.buildingEntryCode!.isNotEmpty)
+              _buildVaultDetailRow('Building Code', _vaultData!.buildingEntryCode!, true),
+            if (_vaultData!.apartmentDoorCode != null && _vaultData!.apartmentDoorCode!.isNotEmpty)
+              _buildVaultDetailRow('Door Code', _vaultData!.apartmentDoorCode!, true),
+            if (_vaultData!.spareKeyLocation != null && _vaultData!.spareKeyLocation!.isNotEmpty)
+              _buildVaultDetailRow('Spare Key', _vaultData!.spareKeyLocation!, false),
+            if (_vaultData!.alarmCode != null && _vaultData!.alarmCode!.isNotEmpty)
+              _buildVaultDetailRow('Alarm Code', _vaultData!.alarmCode!, true),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVaultDetailRow(String label, String value, bool isSensitive) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          Text(
+            '$label: ',
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              color: Colors.white.withValues(alpha: 0.7),
+            ),
+          ),
+          Text(
+            isSensitive && !_showSensitiveData ? '••••' : value,
+            style: GoogleFonts.inter(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+          if (isSensitive) ...[
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => setState(() => _showSensitiveData = !_showSensitiveData),
+              child: Icon(
+                _showSensitiveData ? Icons.visibility_off : Icons.visibility,
+                color: Colors.white.withValues(alpha: 0.7),
+                size: 16,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPetCard(PetInfo pet, bool isDarkMode) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.warningOrange.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.pets, color: AppColors.warningOrange, size: 20),
+              const SizedBox(width: 10),
+              Text(
+                '${pet.name} (${pet.type})',
+                style: GoogleFonts.inter(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
                 ),
-              ],
+              ),
+            ],
+          ),
+          if (pet.medications != null || pet.vetNamePhone != null || 
+              pet.foodInstructions != null || pet.specialNeeds != null) ...[
+            const SizedBox(height: 12),
+            if (pet.medications != null && pet.medications!.isNotEmpty)
+              _buildPetDetailRow('Medications', pet.medications!, isDarkMode),
+            if (pet.vetNamePhone != null && pet.vetNamePhone!.isNotEmpty)
+              _buildPetDetailRow('Vet', pet.vetNamePhone!, isDarkMode),
+            if (pet.foodInstructions != null && pet.foodInstructions!.isNotEmpty)
+              _buildPetDetailRow('Food', pet.foodInstructions!, isDarkMode),
+            if (pet.specialNeeds != null && pet.specialNeeds!.isNotEmpty)
+              _buildPetDetailRow('Special Needs', pet.specialNeeds!, isDarkMode),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPetDetailRow(String label, String value, bool isDarkMode) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(
+              '$label:',
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+              ),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildMedicalInfoCard(bool isDarkMode) {
+    final vault = _vaultData;
+    final hasData = vault != null && (
+      (vault.doctorNamePhone != null && vault.doctorNamePhone!.isNotEmpty) ||
+      (vault.medicationsList != null && vault.medicationsList!.isNotEmpty) ||
+      (vault.allergies != null && vault.allergies!.isNotEmpty) ||
+      (vault.medicalConditions != null && vault.medicalConditions!.isNotEmpty)
+    );
+
+    if (!hasData) {
+      return _buildEmptyStateCard('No medical info added', isDarkMode);
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.dangerRed.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (vault.doctorNamePhone != null && vault.doctorNamePhone!.isNotEmpty) ...[
+            _buildMedicalRow('Doctor', vault.doctorNamePhone!, isDarkMode),
+            const SizedBox(height: 8),
+          ],
+          if (vault.allergies != null && vault.allergies!.isNotEmpty) ...[
+            _buildMedicalRow('Allergies', vault.allergies!, isDarkMode, isImportant: true),
+            const SizedBox(height: 8),
+          ],
+          if (vault.medicationsList != null && vault.medicationsList!.isNotEmpty) ...[
+            _buildMedicalRow('Medications', vault.medicationsList!, isDarkMode),
+            const SizedBox(height: 8),
+          ],
+          if (vault.medicalConditions != null && vault.medicalConditions!.isNotEmpty)
+            _buildMedicalRow('Conditions', vault.medicalConditions!, isDarkMode),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMedicalRow(String label, String value, bool isDarkMode, {bool isImportant = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.inter(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: isImportant ? AppColors.dangerRed : (isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary),
+            letterSpacing: 0.5,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: GoogleFonts.inter(
+            fontSize: 14,
+            color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+          ),
+        ),
+      ],
     );
   }
 

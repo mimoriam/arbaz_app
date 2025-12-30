@@ -30,7 +30,9 @@ import 'package:arbaz_app/models/user_model.dart';
 
 /// Settings/Preferences Screen for the SafeCheck app
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final bool isFamilyView;
+  
+  const SettingsScreen({super.key, this.isFamilyView = false});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -165,34 +167,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
 
-                    // Vacation Mode Card
-                    _buildVacationModeCard(isDarkMode),
+                    // Vacation Mode Card - Senior only
+                    if (!widget.isFamilyView) ...[
+                      _buildVacationModeCard(isDarkMode),
+                      const SizedBox(height: 18),
+                    ],
 
-                    const SizedBox(height: 18),
+                    // Check-in Schedule Section - Senior only
+                    if (!widget.isFamilyView) ...[
+                      _buildSectionHeader(
+                        isDarkMode,
+                        icon: Icons.access_time_outlined,
+                        title: 'CHECK-IN SCHEDULE',
+                      ),
+                      const SizedBox(height: 12),
+                      _buildCheckInSchedule(isDarkMode),
+                      const SizedBox(height: 18),
+                    ],
 
-                    // Check-in Schedule Section
-                    _buildSectionHeader(
-                      isDarkMode,
-                      icon: Icons.access_time_outlined,
-                      title: 'CHECK-IN SCHEDULE',
-                    ),
-                    const SizedBox(height: 12),
-                    _buildCheckInSchedule(isDarkMode),
+                    // Step Options Section - Senior only
+                    if (!widget.isFamilyView) ...[
+                      _buildSectionHeader(
+                        isDarkMode,
+                        icon: Icons.grid_view_outlined,
+                        title: 'STEP OPTIONS',
+                      ),
+                      const SizedBox(height: 12),
+                      _buildStepOptions(isDarkMode),
+                      const SizedBox(height: 18),
+                    ],
 
-                    const SizedBox(height: 18),
-
-                    // Step Options Section
-                    _buildSectionHeader(
-                      isDarkMode,
-                      icon: Icons.grid_view_outlined,
-                      title: 'STEP OPTIONS',
-                    ),
-                    const SizedBox(height: 12),
-                    _buildStepOptions(isDarkMode),
-
-                    const SizedBox(height: 18),
-
-                    // Identity Section
+                    // Identity Section - Both
                     _buildSectionHeader(
                       isDarkMode,
                       icon: Icons.alternate_email,
@@ -203,18 +208,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     const SizedBox(height: 18),
 
-                    // Escalation Alarm Section
-                    _buildSectionHeader(
-                      isDarkMode,
-                      icon: Icons.notifications_outlined,
-                      title: 'ESCALATION ALARM',
-                    ),
-                    const SizedBox(height: 12),
-                    _buildEscalationAlarm(isDarkMode),
+                    // Escalation Alarm Section - Senior only
+                    if (!widget.isFamilyView) ...[
+                      _buildSectionHeader(
+                        isDarkMode,
+                        icon: Icons.notifications_outlined,
+                        title: 'ESCALATION ALARM',
+                      ),
+                      const SizedBox(height: 12),
+                      _buildEscalationAlarm(isDarkMode),
+                      const SizedBox(height: 18),
+                    ],
 
-                    const SizedBox(height: 18),
-
-                    // Family Circle Section
+                    // Family Circle Section - Both
                     _buildSectionHeader(
                       isDarkMode,
                       icon: Icons.people_outline,
@@ -225,24 +231,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     const SizedBox(height: 18),
 
-                    // Generate Invite Code Card
+                    // Generate Invite Code Card - Both
                     _buildGenerateInviteCodeCard(isDarkMode),
 
                     const SizedBox(height: 18),
 
-                    // Family Dashboard Section
-                    _buildSectionHeader(
-                      isDarkMode,
-                      icon: Icons.dashboard_outlined,
-                      title: 'DASHBOARD',
-                    ),
-                    const SizedBox(height: 12),
-                    _buildFamilyDashboardCard(isDarkMode),
+                    // Family Dashboard Section - Family only
+                    if (widget.isFamilyView) ...[
+                      _buildSectionHeader(
+                        isDarkMode,
+                        icon: Icons.dashboard_outlined,
+                        title: 'DASHBOARD',
+                      ),
+                      const SizedBox(height: 12),
+                      _buildFamilyDashboardCard(isDarkMode),
+                    ],
 
-                    const SizedBox(height: 12),
-
-                    // Safety Vault Card
-                    _buildSafetyVaultCard(isDarkMode),
+                    // Safety Vault Card - Senior only
+                    if (!widget.isFamilyView) ...[
+                      const SizedBox(height: 12),
+                      _buildSafetyVaultCard(isDarkMode),
+                    ],
 
                     const SizedBox(height: 18),
 
@@ -1167,9 +1176,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (user == null) return;
 
     // Ensure profile is loaded before generating QR
+    final qrService = context.read<QrInviteService>();
+
     if (_userName.isEmpty) {
       await _loadUserProfile();
     }
+
+    if (!mounted) return;
 
     // Get best available name for QR payload
     // Priority: Loaded name > Auth Display Name > Email prefix > "User"
@@ -1180,7 +1193,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     
     debugPrint('🔍 QR generation: using name "$bestName"');
 
-    final qrService = context.read<QrInviteService>();
     final inviteCode = qrService.generateInviteQrData(
       user.uid,
       'senior', // or 'family' depending on context
