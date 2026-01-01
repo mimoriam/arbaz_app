@@ -264,6 +264,14 @@ class FirestoreService {
     await _profileRef(uid).update(updates);
   }
 
+  /// Updates FCM token for push notifications
+  Future<void> updateFcmToken(String uid, String token) async {
+    await _profileRef(uid).set({
+      'fcmToken': token,
+      'fcmTokenUpdatedAt': Timestamp.now(),
+    }, SetOptions(merge: true));
+  }
+
   // ===== Roles Operations =====
 
   Future<UserRoles?> getUserRoles(String uid) async {

@@ -16,6 +16,8 @@ import 'services/quotes_service.dart';
 import 'services/location_service.dart';
 import 'services/contacts_service.dart';
 import 'services/checkin_schedule_service.dart';
+import 'services/notification_service.dart';
+import 'services/fcm_service.dart';
 import 'providers/brain_games_provider.dart';
 import 'providers/checkin_schedule_provider.dart';
 import 'providers/health_quiz_provider.dart';
@@ -39,6 +41,9 @@ class AppInitializer extends StatefulWidget {
 class _AppInitializerState extends State<AppInitializer> {
   bool _isLoading = true;
   String? _error;
+  
+  // Single instance of NotificationService to be initialized and provided
+  NotificationService? _notificationService;
 
   @override
   void initState() {
@@ -53,9 +58,21 @@ class _AppInitializerState extends State<AppInitializer> {
     });
 
     try {
+      // Initialize Firebase first since NotificationService may depend on it
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
+      
+      // Get the singleton NotificationService instance
+      // Using .instance getter makes singleton pattern explicit
+      _notificationService = NotificationService.instance;
+      if (!_notificationService!.isInitialized) {
+        await _notificationService!.initialize();
+      }
+      
+      // Initialize FCM for push notifications (token will be saved when user logs in)
+      // FcmService is also a singleton and guards against re-initialization internally
+      await FcmService().initialize();
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -115,6 +132,7 @@ class _AppInitializerState extends State<AppInitializer> {
         // Data services
         Provider(create: (_) => FirestoreService()),
         Provider(create: (_) => QrInviteService()),
+        Provider<NotificationService>.value(value: _notificationService!),
         Provider(create: (_) => RolePreferenceService()),
         
         // New Services

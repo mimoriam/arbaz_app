@@ -13,6 +13,7 @@ const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onRequest } = require("firebase-functions/v2/https");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, Timestamp, FieldValue } = require("firebase-admin/firestore");
+const { getMessaging } = require("firebase-admin/messaging");
 const logger = require("firebase-functions/logger");
 const { DateTime } = require("luxon");
 const { CloudTasksClient } = require("@google-cloud/tasks");
@@ -51,8 +52,10 @@ function parseScheduleToTime(schedule) {
   try {
     if (!schedule || typeof schedule !== "string") return null;
     
-    let normalized = schedule.trim().toUpperCase().replace(/\s+/g, " ");
-    normalized = normalized.replace(/(AM|PM)$/i, " $1").trim();
+    // First add space before AM/PM if missing, then normalize all whitespace
+    let normalized = schedule.trim().toUpperCase();
+    normalized = normalized.replace(/(AM|PM)$/i, " $1"); // Add space before AM/PM
+    normalized = normalized.replace(/\s+/g, " ").trim(); // Normalize to single spaces
     
     const parts = normalized.split(" ");
     if (parts.length !== 2) return null;
@@ -249,12 +252,24 @@ function findNextFutureSchedule(schedules, now, userTimezone = null) {
   
   const nowInZone = DateTime.fromJSDate(now, { zone: tz });
   
+  logger.info(`findNextFutureSchedule DEBUG:`, {
+    schedules: effectiveSchedules,
+    rawNow: now.toISOString(),
+    timezone: tz,
+    nowInZone: nowInZone.toISO(),
+  });
+  
   let nextFuture = null;
   let earliestTomorrow = null;
   const tomorrowInZone = nowInZone.plus({ days: 1 });
   
   for (const schedule of effectiveSchedules) {
     const parsed = parseScheduleToTime(schedule);
+    
+    logger.info(`findNextFutureSchedule - parsing schedule "${schedule}":`, {
+      parsed: parsed ? JSON.stringify(parsed) : 'null (PARSE FAILED)',
+    });
+    
     if (!parsed) continue;
     
     const todayTime = nowInZone.set({ 
@@ -264,8 +279,17 @@ function findNextFutureSchedule(schedules, now, userTimezone = null) {
       millisecond: 0 
     });
     
+    const isFuture = todayTime > nowInZone;
+    logger.info(`findNextFutureSchedule - time comparison:`, {
+      schedule,
+      todayTimeISO: todayTime.toISO(),
+      nowInZoneISO: nowInZone.toISO(),
+      isFuture,
+      diffMs: todayTime.toMillis() - nowInZone.toMillis(),
+    });
+    
     // Only consider future times for task scheduling
-    if (todayTime > nowInZone) {
+    if (isFuture) {
       if (!nextFuture || todayTime < nextFuture) {
         nextFuture = todayTime;
       }
@@ -285,6 +309,13 @@ function findNextFutureSchedule(schedules, now, userTimezone = null) {
   
   // Return next future today, or earliest tomorrow if no future today
   const result = nextFuture || earliestTomorrow;
+  
+  logger.info(`findNextFutureSchedule - result:`, {
+    nextFuture: nextFuture?.toISO() || 'null',
+    earliestTomorrow: earliestTomorrow?.toISO() || 'null',
+    finalResult: result?.toISO() || 'null',
+  });
+  
   return result ? result.toJSDate() : null;
 }
 
@@ -303,56 +334,82 @@ function getQueuePath() {
  * @returns {Promise<string|null>} - Task name if created, null on failure
  */
 async function createCloudTask(userId, scheduledTime, userTimezone) {
-  try {
-    const queuePath = getQueuePath();
-    
-    // Calculate execution time with grace period
-    const executeAt = new Date(scheduledTime.getTime() + GRACE_PERIOD_MINUTES * 60 * 1000);
-    
-    // Task payload
-    const payload = {
-      userId,
-      scheduledTime: scheduledTime.toISOString(),
-      createdAt: new Date().toISOString(),
-      timezone: userTimezone || TIMEZONE,
-    };
+  const queuePath = getQueuePath();
+  
+  // Calculate execution time with grace period
+  const executeAt = new Date(scheduledTime.getTime() + GRACE_PERIOD_MINUTES * 60 * 1000);
+  
+  // Task payload
+  const payload = {
+    userId,
+    scheduledTime: scheduledTime.toISOString(),
+    createdAt: new Date().toISOString(),
+    timezone: userTimezone || TIMEZONE,
+  };
 
-    // Get the function URL for handleMissedCheckIn
-    const functionUrl = `https://${CLOUD_TASKS_LOCATION}-${PROJECT_ID}.cloudfunctions.net/handleMissedCheckIn`;
+  // Get the function URL for handleMissedCheckIn
+  const functionUrl = `https://${CLOUD_TASKS_LOCATION}-${PROJECT_ID}.cloudfunctions.net/handleMissedCheckIn`;
 
-    const task = {
-      httpRequest: {
-        httpMethod: "POST",
-        url: functionUrl,
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: Buffer.from(JSON.stringify(payload)).toString("base64"),
-        oidcToken: {
-          serviceAccountEmail: `${PROJECT_ID}@appspot.gserviceaccount.com`,
-        },
+  const task = {
+    httpRequest: {
+      httpMethod: "POST",
+      url: functionUrl,
+      headers: {
+        "Content-Type": "application/json",
       },
-      scheduleTime: {
-        seconds: Math.floor(executeAt.getTime() / 1000),
+      body: Buffer.from(JSON.stringify(payload)).toString("base64"),
+      oidcToken: {
+        serviceAccountEmail: `${PROJECT_ID}@appspot.gserviceaccount.com`,
       },
-    };
+    },
+    scheduleTime: {
+      seconds: Math.floor(executeAt.getTime() / 1000),
+    },
+  };
 
-    const [response] = await tasksClient.createTask({
-      parent: queuePath,
-      task,
-    });
+  // Retry with exponential backoff (3 attempts: 1s, 2s, 4s delays)
+  const maxAttempts = 3;
+  let lastError = null;
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const [response] = await tasksClient.createTask({
+        parent: queuePath,
+        task,
+      });
 
-    logger.info(`Created Cloud Task for user ${userId}`, { 
-      taskName: response.name,
-      scheduledTime: scheduledTime.toISOString(),
-      executeAt: executeAt.toISOString(),
-    });
+      logger.info(`Created Cloud Task for user ${userId}`, { 
+        taskName: response.name,
+        scheduledTime: scheduledTime.toISOString(),
+        executeAt: executeAt.toISOString(),
+        attempt,
+      });
 
-    return response.name;
-  } catch (error) {
-    logger.error(`Error creating Cloud Task for user ${userId}:`, { error: error.message });
-    return null;
+      return response.name;
+    } catch (error) {
+      lastError = error;
+      
+      // Only retry on transient errors
+      const isTransient = error.code === 14 || // UNAVAILABLE
+                         error.code === 4 ||  // DEADLINE_EXCEEDED
+                         error.message?.includes("UNAVAILABLE");
+      
+      if (!isTransient || attempt === maxAttempts) {
+        logger.error(`Error creating Cloud Task for user ${userId} (attempt ${attempt}/${maxAttempts}):`, { 
+          error: error.message,
+          code: error.code,
+        });
+        break;
+      }
+      
+      // Exponential backoff: 1s, 2s, 4s
+      const delay = Math.pow(2, attempt - 1) * 1000;
+      logger.warn(`Retrying Cloud Task creation for user ${userId} (attempt ${attempt}/${maxAttempts}), waiting ${delay}ms`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
+  
+  return null;
 }
 
 /**
@@ -516,6 +573,89 @@ async function scheduleCheckInTask(userId) {
 }
 
 /**
+ * Send FCM push notification to senior for missed check-in
+ * @param {string} userId - Senior's user ID  
+ * @param {number} missedCount - Number of missed check-ins today
+ */
+async function sendMissedCheckInNotification(userId, missedCount) {
+  try {
+    // Get user's FCM token from profile
+    const profileDoc = await db.collection("users").doc(userId)
+      .collection("data").doc("profile").get();
+    
+    if (!profileDoc.exists) {
+      logger.info(`No profile found for user ${userId}, skipping FCM`);
+      return;
+    }
+    
+    const fcmToken = profileDoc.data()?.fcmToken;
+    if (!fcmToken) {
+      logger.info(`No FCM token for user ${userId}, skipping push notification`);
+      return;
+    }
+    
+    // Build notification based on missed count
+    const title = missedCount === 1 
+      ? "Check-in Reminder"
+      : "Multiple Missed Check-ins";
+    
+    const body = missedCount === 1
+      ? "You haven't checked in yet today. Tap to let your family know you're okay!"
+      : `You've missed ${missedCount} check-ins today. Tap to check in now.`;
+    
+    // Send FCM message
+    const message = {
+      token: fcmToken,
+      notification: {
+        title,
+        body,
+      },
+      data: {
+        type: "missed_checkin",
+        missedCount: String(missedCount),
+        source: "server",
+        timestamp: new Date().toISOString(),
+      },
+      android: {
+        priority: "high",
+        notification: {
+          channelId: "check_in_reminders",
+          priority: "high",
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            sound: "default",
+            badge: missedCount,
+          },
+        },
+      },
+    };
+    
+    const response = await getMessaging().send(message);
+    logger.info(`FCM sent for user ${userId}`, { messageId: response, missedCount });
+    
+  } catch (error) {
+    // Handle invalid token errors gracefully
+    if (error.code === "messaging/invalid-registration-token" ||
+        error.code === "messaging/registration-token-not-registered") {
+      logger.warn(`Invalid FCM token for user ${userId}, clearing token`);
+      // Clear invalid token
+      try {
+        await db.collection("users").doc(userId)
+          .collection("data").doc("profile")
+          .update({ fcmToken: FieldValue.delete() });
+      } catch (clearError) {
+        logger.error("Error clearing invalid token:", { error: clearError.message });
+      }
+    } else {
+      logger.error(`Error sending FCM for user ${userId}:`, { error: error.message });
+    }
+  }
+}
+
+/**
  * HTTP Handler: Called by Cloud Tasks when check-in time passes
  */
 exports.handleMissedCheckIn = onRequest({
@@ -555,12 +695,13 @@ exports.handleMissedCheckIn = onRequest({
   const now = new Date();
   
   try {
-    await db.runTransaction(async (transaction) => {
+    // Capture missedCount from transaction for FCM notification
+    const missedCount = await db.runTransaction(async (transaction) => {
       const seniorStateDoc = await transaction.get(seniorStateRef);
       
       if (!seniorStateDoc.exists) {
         logger.info(`Senior state not found for user ${userId}`);
-        return;
+        return null; // Explicit null return for no action
       }
       
       const data = seniorStateDoc.data();
@@ -568,7 +709,7 @@ exports.handleMissedCheckIn = onRequest({
       // Check if vacation mode was enabled after task creation
       if (data.vacationMode) {
         logger.info(`User ${userId} is now on vacation, skipping missed check-in`);
-        return;
+        return null;
       }
       
       // TOCTOU check: Did user check in between task creation and now?
@@ -577,7 +718,7 @@ exports.handleMissedCheckIn = onRequest({
       
       if (lastCheckIn && lastCheckIn > taskCreatedAt) {
         logger.info(`User ${userId} checked in after task creation, not a miss`);
-        return;
+        return null;
       }
       
       // Also check if checked in today (same day as scheduled time)
@@ -589,7 +730,7 @@ exports.handleMissedCheckIn = onRequest({
         
         if (lastCheckInLuxon.hasSame(scheduledLuxon, "day")) {
           logger.info(`User ${userId} already checked in today`);
-          return;
+          return null;
         }
       }
       
@@ -608,7 +749,7 @@ exports.handleMissedCheckIn = onRequest({
         if (createdLuxon.hasSame(nowLuxon, "day")) {
           logger.info(`User ${userId} is on day 1 with default schedule only, skipping missed check-in`);
           // Still schedule for tomorrow
-          return;
+          return null;
         }
       }
       
@@ -623,7 +764,7 @@ exports.handleMissedCheckIn = onRequest({
       
       if (existingLog.exists) {
         logger.info(`Missed check-in already logged for user ${userId}`);
-        return;
+        return null;
       }
       
       // Log the missed check-in
@@ -657,6 +798,9 @@ exports.handleMissedCheckIn = onRequest({
         missedSchedule,
       });
       
+      // Compute missedCount for FCM notification
+      const computedMissedCount = (data.missedCheckInsToday || 0) + 1;
+      
       // Check for escalation
       if (newConsecutive >= ESCALATION_THRESHOLD_DAYS) {
         const lastEscalation = data.lastEscalationNotificationAt?.toDate?.();
@@ -689,7 +833,21 @@ exports.handleMissedCheckIn = onRequest({
           });
         }
       }
+      
+      // Return missedCount for FCM notification (now properly captured outside)
+      return computedMissedCount;
     });
+    
+    // Send FCM push notification outside transaction (non-blocking)
+    // missedCount is now properly defined from transaction return value
+    if (missedCount != null && missedCount > 0) {
+      try {
+        await sendMissedCheckInNotification(userId, missedCount);
+      } catch (fcmError) {
+        // Log but don't fail the request - FCM is best-effort
+        logger.error(`FCM notification failed for user ${userId}:`, { error: fcmError.message });
+      }
+    }
     
     // Schedule next day's task (outside transaction for simplicity)
     await scheduleCheckInTask(userId);

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../screens/auth/login/login_screen.dart';
 import '../screens/navbar/home/home_screen.dart';
 import '../screens/questionnaire/questionnaire_screen.dart';
+import 'fcm_service.dart';
 import 'firestore_service.dart';
 import 'role_preference_service.dart';
 
@@ -137,6 +138,13 @@ class _RoleRouterState extends State<_RoleRouter> {
         if (activeRole != null) {
           await rolePreferenceService.setActiveRole(uid, activeRole);
         }
+      }
+      
+      // Register FCM token for push notifications (non-blocking, errors don't affect login)
+      try {
+        await FcmService().registerToken(uid);
+      } catch (fcmError) {
+        debugPrint('FCM registration failed (non-fatal): $fcmError');
       }
       
       debugPrint('🔐 AuthGate: FINAL activeRole=$activeRole');

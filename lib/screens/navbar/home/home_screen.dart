@@ -4,6 +4,7 @@ import 'package:arbaz_app/screens/navbar/cognitive_games/cognitive_games_screen.
 import 'package:arbaz_app/screens/navbar/home/senior_checkin_flow.dart';
 import 'package:arbaz_app/screens/navbar/settings/settings_screen.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
+import 'package:arbaz_app/services/notification_service.dart';
 import 'package:arbaz_app/services/role_preference_service.dart';
 import 'package:arbaz_app/services/vacation_mode_provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -68,6 +69,22 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   // Timer to trigger status update when nextExpectedCheckIn is reached
   Timer? _checkInDeadlineTimer;
   DateTime? _nextExpectedCheckIn;
+  
+  // Track missed check-ins for notification triggering
+  int _previousMissedCheckInsToday = 0;
+  bool _wasRunningLate = false; // Track running late state for notification triggering
+  bool _isFirstStreamEmission = true; // Prevent notification on first load
+  
+  /// Atomically initializes missed check-in baseline on first stream emission.
+  /// Returns true if this was the first emission (baseline set), false otherwise.
+  /// This prevents a race condition where rapid stream emissions could both pass
+  /// the _isFirstStreamEmission check before the flag is set to false.
+  bool _tryInitializeMissedCount(int count) {
+    if (!_isFirstStreamEmission) return false;
+    _isFirstStreamEmission = false;
+    _previousMissedCheckInsToday = count;
+    return true; // Was first emission - don't trigger notification
+  }
 
   @override
   void initState() {
@@ -189,6 +206,10 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
             // Schedule a timer to update status when nextExpectedCheckIn is reached
             _scheduleCheckInDeadlineTimer(seniorState.nextExpectedCheckIn, isToday || skipDay1Default);
 
+            // Get vacation mode state BEFORE setState for notification logic
+            final vacationMode = context.read<VacationModeProvider>().isVacationMode;
+            final currentMissedCount = seniorState.missedCheckInsToday;
+
             setState(() {
               _hasCheckedInToday = isToday;
               _currentStreak = seniorState.currentStreak;
@@ -198,14 +219,38 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
               if (isToday) {
                 _currentStatus = SafetyStatus.safe;
                 _pulseController.stop();
+                // Cancel any pending missed check-in notification
+                NotificationService().cancelMissedCheckInNotification();
+                _wasRunningLate = false; // Reset tracking
               } else if (isRunningLate) {
                 // Show yellow "I'M OK!" button when running late
                 _currentStatus = SafetyStatus.ok;
+                
+                // Trigger notification only on first detection of running late
+                if (!_wasRunningLate && !vacationMode) {
+                  NotificationService().showMissedCheckInNotification(
+                    missedCount: 1,
+                    isVacationMode: false,
+                  );
+                }
+                _wasRunningLate = true;
               } else {
                 // Default green state (includes Day 1)
                 _currentStatus = SafetyStatus.safe;
+                _wasRunningLate = false;
               }
             });
+            
+            // Trigger notification if missedCheckInsToday increased (from Firestore)
+            // Use atomic helper to prevent race condition on rapid stream emissions
+            final wasFirstEmission = _tryInitializeMissedCount(currentMissedCount);
+            if (!wasFirstEmission && currentMissedCount > _previousMissedCheckInsToday && currentMissedCount > 0) {
+              NotificationService().showMissedCheckInNotification(
+                missedCount: currentMissedCount,
+                isVacationMode: vacationMode,
+              );
+              _previousMissedCheckInsToday = currentMissedCount;
+            }
           } else {
             // No senior state found - still mark as loaded
             setState(() => _isLoadingCheckInStatus = false);
@@ -411,16 +456,34 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     // Calculate delay until nextExpectedCheckIn (add 1 second buffer to ensure we're past it)
     final delay = nextExpectedCheckIn.difference(now) + const Duration(seconds: 1);
     
+    // Store the scheduled time the timer was created for (for TOCTOU validation)
+    final DateTime scheduledFor = nextExpectedCheckIn;
+    
     _checkInDeadlineTimer = Timer(delay, () {
       if (!mounted) return;
       
-      // Re-check status when timer fires
-      if (!_hasCheckedInToday && _nextExpectedCheckIn != null) {
+      // TOCTOU Check: Validate the scheduled time hasn't changed since timer creation
+      // This prevents notification if user changed schedule while timer was pending
+      if (!_hasCheckedInToday && _nextExpectedCheckIn != null && 
+          _nextExpectedCheckIn!.isAtSameMomentAs(scheduledFor)) {
         final currentTime = DateTime.now();
         if (currentTime.isAfter(_nextExpectedCheckIn!)) {
           setState(() {
             _currentStatus = SafetyStatus.ok; // Yellow - running late
           });
+          
+          // Trigger local notification immediately when running late
+          final vacationMode = context.read<VacationModeProvider>().isVacationMode;
+          if (!vacationMode && !_wasRunningLate) {
+            NotificationService().showMissedCheckInNotification(
+              missedCount: 1,
+              isVacationMode: false,
+            );
+            // Update flag to prevent duplicate notification from stream listener
+            setState(() {
+              _wasRunningLate = true;
+            });
+          }
         }
       }
     });

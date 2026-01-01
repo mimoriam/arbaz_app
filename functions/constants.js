@@ -10,7 +10,9 @@ module.exports = {
   // Default list of check-in schedules for new users
   DEFAULT_SCHEDULES: ['11:00 AM'],
   
-  // Default timezone for the app
+  // Default timezone - ONLY used as fallback when user's profile.timezone is null/undefined
+  // User's actual timezone should always be preferred for accurate day boundary calculations
+  // See getUserTimezone() in index.js for retrieval logic
   TIMEZONE: 'Asia/Karachi',
   
   // Firestore batch operation limits
@@ -18,7 +20,8 @@ module.exports = {
   GETALL_CHUNK_SIZE: 500,
   
   // Grace period in minutes before marking check-in as missed
-  GRACE_PERIOD_MINUTES: 5,
+  // Set to 0 for instant notification when scheduled time passes
+  GRACE_PERIOD_MINUTES: 0,
   
   // Cloud Tasks configuration
   CLOUD_TASKS_QUEUE: 'check-in-queue',
