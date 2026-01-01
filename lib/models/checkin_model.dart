@@ -17,6 +17,12 @@ class CheckInRecord {
   final double? longitude;
   final String? locationAddress;
 
+  // Schedule tracking for success rate calculation
+  /// Number of check-ins scheduled for the day when this check-in was recorded.
+  /// Used for calculating accurate success rate (check-ins / scheduled).
+  /// Defaults to 1 for backward compatibility.
+  final int scheduledCount;
+
   CheckInRecord({
     required this.id,
     required this.userId,
@@ -29,6 +35,7 @@ class CheckInRecord {
     this.latitude,
     this.longitude,
     this.locationAddress,
+    this.scheduledCount = 1,
   });
 
   factory CheckInRecord.fromFirestore(DocumentSnapshot doc) {
@@ -59,8 +66,10 @@ class CheckInRecord {
       latitude: (data['latitude'] as num?)?.toDouble(),
       longitude: (data['longitude'] as num?)?.toDouble(),
       locationAddress: data['locationAddress'],
+      scheduledCount: (data['scheduledCount'] as int?) ?? 1,
     );
   }
+
   Map<String, dynamic> toFirestore() {
     return {
       'userId': userId,
@@ -73,6 +82,7 @@ class CheckInRecord {
       'latitude': latitude,
       'longitude': longitude,
       'locationAddress': locationAddress,
+      'scheduledCount': scheduledCount,
     };
   }
 
@@ -89,6 +99,7 @@ class CheckInRecord {
     double? latitude,
     double? longitude,
     String? locationAddress,
+    int? scheduledCount,
   }) {
     return CheckInRecord(
       id: id ?? this.id,
@@ -102,6 +113,7 @@ class CheckInRecord {
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
       locationAddress: locationAddress ?? this.locationAddress,
+      scheduledCount: scheduledCount ?? this.scheduledCount,
     );
   }
 }

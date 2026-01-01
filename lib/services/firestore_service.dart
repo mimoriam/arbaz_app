@@ -108,7 +108,9 @@ DateTime? calculateNextExpectedCheckIn(
   }
   
   // Not checked in today - find next upcoming schedule today or tomorrow
+  // Also track earliest today (even if passed) for "running late" detection
   DateTime? nextToday;
+  DateTime? earliestToday; // For "running late" detection
   DateTime? earliestTomorrow;
   
   for (final schedule in effectiveSchedules) {
@@ -120,6 +122,11 @@ DateTime? calculateNextExpectedCheckIn(
       now.year, now.month, now.day,
       parsed.hours, parsed.minutes,
     );
+    
+    // Track earliest schedule for today (even if passed - for running late detection)
+    if (earliestToday == null || todayTime.isBefore(earliestToday)) {
+      earliestToday = todayTime;
+    }
     
     if (todayTime.isAfter(now)) {
       if (nextToday == null || todayTime.isBefore(nextToday)) {
@@ -138,7 +145,10 @@ DateTime? calculateNextExpectedCheckIn(
     }
   }
   
-  return nextToday ?? earliestTomorrow;
+  // If there's an upcoming schedule today, use it
+  // Otherwise, if all today's schedules have passed, return earliest today for "running late" detection
+  // Only fall back to tomorrow if there are no schedules today at all
+  return nextToday ?? earliestToday ?? earliestTomorrow;
 }
 
 /// Retry a Future with exponential backoff for transient failures
@@ -218,7 +228,13 @@ class FirestoreService {
   Future<UserProfile?> getUserProfile(String uid) async {
     final doc = await _profileRef(uid).get();
     if (!doc.exists) return null;
-    return UserProfile.fromFirestore(doc);
+    try {
+      return UserProfile.fromFirestore(doc);
+    } catch (e) {
+      // ignore: avoid_print - debugPrint unavailable in pure Dart file
+      print('Invalid profile data for user $uid: $e');
+      return null; // Return null for malformed profiles
+    }
   }
 
   /// Updates the lastLoginAt timestamp for an existing profile.

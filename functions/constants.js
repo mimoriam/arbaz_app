@@ -19,4 +19,11 @@ module.exports = {
   
   // Grace period in minutes before marking check-in as missed
   GRACE_PERIOD_MINUTES: 5,
+  
+  // Cloud Tasks configuration
+  CLOUD_TASKS_QUEUE: 'check-in-queue',
+  CLOUD_TASKS_LOCATION: 'us-central1',
+  
+  // Escalation threshold: send alerts after this many consecutive missed days
+  ESCALATION_THRESHOLD_DAYS: 3,
 };

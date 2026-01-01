@@ -205,6 +205,11 @@ class SeniorState {
   final int missedCheckInsToday; // Count of missed check-ins today (reset daily)
   final DateTime? lastMissedCheckIn; // Timestamp of most recent missed check-in
   final DateTime? nextExpectedCheckIn; // For scalable Cloud Function queries
+  
+  // Cloud Tasks fields
+  final String? activeTaskId; // Cloud Tasks task name for pending check-in
+  final int consecutiveMissedDays; // Counter for escalation (reset on check-in)
+  final DateTime? lastEscalationNotificationAt; // Rate-limit escalation alerts
 
   SeniorState({
     this.lastCheckIn,
@@ -220,6 +225,9 @@ class SeniorState {
     this.missedCheckInsToday = 0,
     this.lastMissedCheckIn,
     this.nextExpectedCheckIn,
+    this.activeTaskId,
+    this.consecutiveMissedDays = 0,
+    this.lastEscalationNotificationAt,
   });
 
   factory SeniorState.fromFirestore(DocumentSnapshot doc) {
@@ -270,6 +278,11 @@ class SeniorState {
       nextExpectedCheckIn: data['nextExpectedCheckIn'] is Timestamp
           ? (data['nextExpectedCheckIn'] as Timestamp).toDate()
           : null,
+      activeTaskId: data['activeTaskId'] as String?,
+      consecutiveMissedDays: (data['consecutiveMissedDays'] as num?)?.toInt() ?? 0,
+      lastEscalationNotificationAt: data['lastEscalationNotificationAt'] is Timestamp
+          ? (data['lastEscalationNotificationAt'] as Timestamp).toDate()
+          : null,
     );
   }
 
@@ -290,6 +303,9 @@ class SeniorState {
       'missedCheckInsToday': missedCheckInsToday,
       'lastMissedCheckIn': lastMissedCheckIn != null ? Timestamp.fromDate(lastMissedCheckIn!) : null,
       'nextExpectedCheckIn': nextExpectedCheckIn != null ? Timestamp.fromDate(nextExpectedCheckIn!) : null,
+      'activeTaskId': activeTaskId,
+      'consecutiveMissedDays': consecutiveMissedDays,
+      'lastEscalationNotificationAt': lastEscalationNotificationAt != null ? Timestamp.fromDate(lastEscalationNotificationAt!) : null,
     };
   }
 
@@ -307,6 +323,9 @@ class SeniorState {
     int? missedCheckInsToday,
     DateTime? lastMissedCheckIn,
     DateTime? nextExpectedCheckIn,
+    String? activeTaskId,
+    int? consecutiveMissedDays,
+    DateTime? lastEscalationNotificationAt,
   }) {
     return SeniorState(
       lastCheckIn: lastCheckIn ?? this.lastCheckIn,
@@ -323,6 +342,9 @@ class SeniorState {
       missedCheckInsToday: missedCheckInsToday ?? this.missedCheckInsToday,
       lastMissedCheckIn: lastMissedCheckIn ?? this.lastMissedCheckIn,
       nextExpectedCheckIn: nextExpectedCheckIn ?? this.nextExpectedCheckIn,
+      activeTaskId: activeTaskId ?? this.activeTaskId,
+      consecutiveMissedDays: consecutiveMissedDays ?? this.consecutiveMissedDays,
+      lastEscalationNotificationAt: lastEscalationNotificationAt ?? this.lastEscalationNotificationAt,
     );
   }
 }

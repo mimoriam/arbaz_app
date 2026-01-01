@@ -170,13 +170,21 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
             status = isSameDay ? 'safe' : 'pending';
             
             // Check for missed check-ins (has schedules passed today with no check-in)
-            // Skip day-1 logic: don't show alert for seniors created today (matching Cloud Function behavior)
+            // Day 1 logic: skip ONLY for default 11:00 AM schedule
+            // If user adds custom schedules on Day 1, those SHOULD work normally
             final isDay1 = seniorState.seniorCreatedAt != null &&
                 seniorState.seniorCreatedAt!.year == now.year &&
                 seniorState.seniorCreatedAt!.month == now.month &&
                 seniorState.seniorCreatedAt!.day == now.day;
             
-            if (!isSameDay && seniorState.checkInSchedules.isNotEmpty && !isDay1) {
+            // Check if using only the default schedule
+            final hasOnlyDefaultSchedule = seniorState.checkInSchedules.length == 1 &&
+                seniorState.checkInSchedules.first.trim().toUpperCase() == '11:00 AM';
+            
+            // Only skip on Day 1 if using only the default schedule
+            final skipDay1Default = isDay1 && hasOnlyDefaultSchedule;
+            
+            if (!isSameDay && seniorState.checkInSchedules.isNotEmpty && !skipDay1Default) {
               for (final schedule in seniorState.checkInSchedules) {
                 final scheduledTime = _parseScheduleTime(schedule, now);
                 if (scheduledTime != null && now.isAfter(scheduledTime)) {

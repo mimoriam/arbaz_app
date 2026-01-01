@@ -664,9 +664,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (picked != null) {
       final hour = picked.hourOfPeriod == 0 ? 12 : picked.hourOfPeriod;
       final minute = picked.minute.toString().padLeft(2, '0');
-      final period = picked.period == DayPeriod.am ? 'am' : 'pm';
-      final formattedTime =
-          '${hour.toString().padLeft(2, '0')}:$minute $period';
+      final period = picked.period == DayPeriod.am ? 'AM' : 'PM';
+      final formattedTime = '$hour:$minute $period';
 
       scheduleProvider.addSchedule(formattedTime);
     }

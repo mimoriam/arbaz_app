@@ -61,6 +61,13 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   String _userName = '';
   String? _lastCheckInLocation;
   String? _todayQuote;
+  
+  // Real-time stream subscription for senior state updates
+  StreamSubscription<SeniorState?>? _seniorStateSubscription;
+  
+  // Timer to trigger status update when nextExpectedCheckIn is reached
+  Timer? _checkInDeadlineTimer;
+  DateTime? _nextExpectedCheckIn;
 
   @override
   void initState() {
@@ -85,6 +92,10 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       await _loadUserData();
     } catch (e) {
       debugPrint('Error loading user data: $e');
+      // Ensure loading state is cleared on error to prevent stuck button
+      if (mounted) {
+        setState(() => _isLoadingCheckInStatus = false);
+      }
     }
 
     try {
@@ -136,39 +147,77 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
         }
       }
 
-      // Load Senior State for Check-in status
-      final seniorState = await firestoreService.getSeniorState(user.uid);
-      if (mounted) {
-        if (seniorState != null) {
-          final lastCheckIn = seniorState.lastCheckIn;
-          if (lastCheckIn != null) {
+      // Subscribe to Senior State for real-time check-in status updates
+      // This ensures the UI updates when nextExpectedCheckIn changes (e.g., from Settings)
+      _seniorStateSubscription?.cancel();
+      _seniorStateSubscription = firestoreService.streamSeniorState(user.uid).listen(
+        (seniorState) {
+          if (!mounted) return;
+          
+          if (seniorState != null) {
+            final lastCheckIn = seniorState.lastCheckIn;
             final now = DateTime.now();
-            final isToday =
+            
+            // Check if checked in today
+            final isToday = lastCheckIn != null &&
                 lastCheckIn.year == now.year &&
                 lastCheckIn.month == now.month &&
                 lastCheckIn.day == now.day;
+            
+            // Day 1 logic: skip "running late" ONLY for the default 11:00 AM schedule
+            // If user adds custom schedules on Day 1, those SHOULD work normally
+            final isDay1 = seniorState.seniorCreatedAt != null &&
+                seniorState.seniorCreatedAt!.year == now.year &&
+                seniorState.seniorCreatedAt!.month == now.month &&
+                seniorState.seniorCreatedAt!.day == now.day;
+            
+            // Check if using only the default schedule (11:00 AM)
+            // If user added custom schedules, those should trigger yellow even on Day 1
+            final hasOnlyDefaultSchedule = seniorState.checkInSchedules.length == 1 &&
+                seniorState.checkInSchedules.first.toUpperCase() == '11:00 AM';
+            
+            // Skip "running late" only if it's Day 1 AND using only the default schedule
+            final skipDay1Default = isDay1 && hasOnlyDefaultSchedule;
+            
+            // Check if running late (past scheduled check-in time)
+            bool isRunningLate = false;
+            if (!isToday && !skipDay1Default && seniorState.nextExpectedCheckIn != null) {
+              // If we're past the next expected check-in time, we're running late
+              isRunningLate = now.isAfter(seniorState.nextExpectedCheckIn!);
+            }
+            
+            // Schedule a timer to update status when nextExpectedCheckIn is reached
+            _scheduleCheckInDeadlineTimer(seniorState.nextExpectedCheckIn, isToday || skipDay1Default);
 
             setState(() {
               _hasCheckedInToday = isToday;
               _currentStreak = seniorState.currentStreak;
               _isLoadingCheckInStatus = false; // Status verified
+              _nextExpectedCheckIn = seniorState.nextExpectedCheckIn;
+              
               if (isToday) {
                 _currentStatus = SafetyStatus.safe;
                 _pulseController.stop();
+              } else if (isRunningLate) {
+                // Show yellow "I'M OK!" button when running late
+                _currentStatus = SafetyStatus.ok;
+              } else {
+                // Default green state (includes Day 1)
+                _currentStatus = SafetyStatus.safe;
               }
             });
           } else {
-            setState(() {
-              _currentStreak = seniorState.currentStreak;
-              _isLoadingCheckInStatus =
-                  false; // Status verified (no check-in yet)
-            });
+            // No senior state found - still mark as loaded
+            setState(() => _isLoadingCheckInStatus = false);
           }
-        } else {
-          // No senior state found - still mark as loaded
-          setState(() => _isLoadingCheckInStatus = false);
-        }
-      }
+        },
+        onError: (error) {
+          debugPrint('Error streaming senior state: $error');
+          if (mounted) {
+            setState(() => _isLoadingCheckInStatus = false);
+          }
+        },
+      );
 
       // Cache daily quote
       final quote = quotesService.getQuoteForToday(user.uid, DateTime.now());
@@ -340,8 +389,41 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
 
   @override
   void dispose() {
+    _checkInDeadlineTimer?.cancel();
+    _seniorStateSubscription?.cancel();
     _pulseController.dispose();
     super.dispose();
+  }
+  
+  /// Schedules a timer to fire when the nextExpectedCheckIn time is reached,
+  /// automatically updating the status to "running late" (yellow).
+  void _scheduleCheckInDeadlineTimer(DateTime? nextExpectedCheckIn, bool hasCheckedInToday) {
+    _checkInDeadlineTimer?.cancel();
+    
+    // Don't schedule if already checked in today or no expected time
+    if (hasCheckedInToday || nextExpectedCheckIn == null) return;
+    
+    final now = DateTime.now();
+    
+    // If already past the deadline, status is already handled
+    if (now.isAfter(nextExpectedCheckIn)) return;
+    
+    // Calculate delay until nextExpectedCheckIn (add 1 second buffer to ensure we're past it)
+    final delay = nextExpectedCheckIn.difference(now) + const Duration(seconds: 1);
+    
+    _checkInDeadlineTimer = Timer(delay, () {
+      if (!mounted) return;
+      
+      // Re-check status when timer fires
+      if (!_hasCheckedInToday && _nextExpectedCheckIn != null) {
+        final currentTime = DateTime.now();
+        if (currentTime.isAfter(_nextExpectedCheckIn!)) {
+          setState(() {
+            _currentStatus = SafetyStatus.ok; // Yellow - running late
+          });
+        }
+      }
+    });
   }
 
   /// Unified role switching helper with loading state and error handling
@@ -613,7 +695,10 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                         SizedBox(height: screenHeight * 0.05),
 
                         // Daily Health Message Section
-                        _buildHealthMessageSection(isDarkMode),
+                        _buildHealthMessageSection(
+                          isDarkMode,
+                          isLoading: vacationProvider.isLoading || _isLoadingCheckInStatus,
+                        ),
 
                         SizedBox(height: screenHeight * 0.05),
                       ],
@@ -1085,7 +1170,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     );
   }
 
-  Widget _buildHealthMessageSection(bool isDarkMode) {
+  Widget _buildHealthMessageSection(bool isDarkMode, {bool isLoading = false}) {
     // Determine message and state
     String message;
     Color dotColor;
@@ -1101,9 +1186,12 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       }
     } else {
       dotColor = AppColors.warningOrange;
-      message = "You haven't checked in yet today";
-      subMessage = "Please take a moment to let us know you're okay.";
+      message = isLoading ? "Syncing your status..." : "You haven't checked in yet today";
+      subMessage = isLoading ? null : "Please take a moment to let us know you're okay.";
     }
+
+    // Show loading indicator when loading and not checked in
+    final showLoadingIndicator = isLoading && !_hasCheckedInToday;
 
     return Column(
       children: [
@@ -1146,23 +1234,34 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Quote Icon or Status Dot
-                Container(
-                  margin: const EdgeInsets.only(top: 4),
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: dotColor,
-                    boxShadow: [
-                      BoxShadow(
-                        color: dotColor.withValues(alpha: 0.4),
-                        blurRadius: 6,
-                        spreadRadius: 1,
-                      ),
-                    ],
+                // Quote Icon, Status Dot, or Loading Indicator
+                if (showLoadingIndicator)
+                  Container(
+                    margin: const EdgeInsets.only(top: 2),
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.warningOrange,
+                    ),
+                  )
+                else
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: dotColor,
+                      boxShadow: [
+                        BoxShadow(
+                          color: dotColor.withValues(alpha: 0.4),
+                          blurRadius: 6,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
                 const SizedBox(width: 14),
 
                 // Message Text
@@ -2057,9 +2156,10 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   ) {
     if (state == null) return SeniorCheckInStatus.pending;
 
+    final now = DateTime.now();
+
     // Check for same day check-in
     if (state.lastCheckIn != null) {
-      final now = DateTime.now();
       final last = state.lastCheckIn!;
       if (last.year == now.year &&
           last.month == now.month &&
@@ -2068,66 +2168,56 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       }
     }
 
-    // Check if time passed
-    // Parse schedules (e.g. "11:00 AM") and compare with now
-    final now = DateTime.now();
-
-    // Day 1 logic: skip default 11 AM schedule for new senior accounts
-    List<String> effectiveSchedules;
-    
+    // Day 1 logic: skip alerting ONLY for default 11:00 AM schedule
+    // If user adds custom schedules on Day 1, those SHOULD work normally
     if (state.seniorCreatedAt != null) {
       final createdDate = state.seniorCreatedAt!;
       final isDay1 = createdDate.year == now.year &&
           createdDate.month == now.month &&
           createdDate.day == now.day;
       
-      if (isDay1) {
-        // On day 1, only consider schedules that differ from default
-        // (i.e., user-added custom schedules, not the default 11:00 AM)
-        effectiveSchedules = schedules
-            .where((s) => s.toUpperCase() != '11:00 AM')
-            .toList();
-        
-        // If no custom schedules on day 1, don't show yellow (late) status
-        if (effectiveSchedules.isEmpty) {
-          return SeniorCheckInStatus.pending;
-        }
-      } else {
-        // Day 2+: use all schedules normally
-        effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
+      // Check if using only the default schedule
+      final hasOnlyDefaultSchedule = schedules.length == 1 &&
+          schedules.first.toUpperCase() == '11:00 AM';
+      
+      // Only skip if Day 1 AND using only default schedule
+      if (isDay1 && hasOnlyDefaultSchedule) {
+        return SeniorCheckInStatus.pending;
+      }
+    }
+
+    // Use nextExpectedCheckIn for accurate "running late" detection
+    // This field is set by the Cloud Functions and kept in sync
+    if (state.nextExpectedCheckIn != null) {
+      if (now.isAfter(state.nextExpectedCheckIn!)) {
+        return SeniorCheckInStatus.alert;
       }
     } else {
-      // No seniorCreatedAt set (legacy accounts) - use normal behavior
-      effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
-    }
+      // Fallback: Parse schedules manually if nextExpectedCheckIn not set
+      // This handles legacy data or edge cases
+      final effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
+      
+      for (final schedule in effectiveSchedules) {
+        try {
+          final time = DateFormat('hh:mm a').parse(schedule);
+          final scheduledTime = DateTime(
+            now.year,
+            now.month,
+            now.day,
+            time.hour,
+            time.minute,
+          );
 
-    bool isLate = false;
-
-    for (final schedule in effectiveSchedules) {
-      // Simple parser assuming "HH:mm AM/PM" format
-      try {
-        // Create a dummy date with today + schedule time
-        // We can use DateFormat to parse "hh:mm a"
-        final time = DateFormat('hh:mm a').parse(schedule);
-        final scheduledTime = DateTime(
-          now.year,
-          now.month,
-          now.day,
-          time.hour,
-          time.minute,
-        );
-
-        if (now.isAfter(scheduledTime)) {
-          isLate = true;
-          break;
+          if (now.isAfter(scheduledTime)) {
+            return SeniorCheckInStatus.alert;
+          }
+        } catch (e) {
+          debugPrint('Error parsing schedule time: $schedule - $e');
         }
-      } catch (e) {
-        // Ignore parse errors
-        debugPrint('Error parsing schedule time: $schedule - $e');
       }
     }
 
-    return isLate ? SeniorCheckInStatus.alert : SeniorCheckInStatus.pending;
+    return SeniorCheckInStatus.pending;
   }
 
   /// Unified role switching helper with loading state and error handling
@@ -2230,7 +2320,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   Future<bool?> _showSeniorConfirmationDialog() {
     return showDialog<bool>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       builder: (dialogContext) => AlertDialog(
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
@@ -2265,27 +2355,37 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: TextButton.styleFrom(
+              minimumSize: Size.zero,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              foregroundColor: Colors.grey,
+            ),
             child: Text(
-              'Cancel',
+              'I Understand, Continue',
               style: GoogleFonts.inter(
-                fontWeight: FontWeight.w600,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
                 color: Colors.grey,
               ),
             ),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
+            onPressed: () => Navigator.pop(dialogContext, false),
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primaryBlue,
+              backgroundColor: AppColors.dangerRed,
+              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
+              elevation: 0,
             ),
             child: Text(
-              'I Understand, Continue',
+              'Cancel',
               style: GoogleFonts.inter(
-                fontWeight: FontWeight.w600,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
                 color: Colors.white,
               ),
             ),
@@ -2444,6 +2544,8 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                               ? AppColors.textPrimaryDark
                               : AppColors.textPrimary,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                       Text(
                         _getGreeting(),
@@ -2459,8 +2561,39 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           ),
 
           // Action Icons
-          // Calendar Removed per user request
-          const SizedBox(width: 8),
+          // Calendar button - only show when a senior is connected
+          if (_selectedSeniorId != null) ...[
+            _buildHeaderIcon(
+              Icons.calendar_month_outlined,
+              isDarkMode,
+              isLoading: _activeAction == HomeAction.calendar,
+              onTap: () async {
+                if (_selectedSeniorId == null) return;
+                setState(() => _activeAction = HomeAction.calendar);
+                await Future.delayed(const Duration(milliseconds: 200));
+                if (mounted) {
+                  // Get the selected senior's name
+                  final seniorName = _allSeniors
+                      .where((s) => s.id == _selectedSeniorId)
+                      .map((s) => s.name)
+                      .firstOrNull ?? 'Senior';
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => CalendarScreen(
+                        seniorId: _selectedSeniorId,
+                        seniorName: seniorName,
+                      ),
+                    ),
+                  );
+                  if (mounted) {
+                    setState(() => _activeAction = HomeAction.none);
+                  }
+                }
+              },
+            ),
+            const SizedBox(width: 8),
+          ],
           _buildHeaderIcon(
             Icons.settings_outlined,
             isDarkMode,
@@ -2784,19 +2917,12 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       );
     }
 
-    // Calculate streak from wellness data (count consecutive days with medication or checkins?)
-    // Prompt says "Track consecutive days where medication === 'Yes'"
-    int medStreak = 0;
-    // Iterate backwards
-    // Note: _weeklyWellnessData is unordered? Firestore query was descending.
-    // So list is Recent -> Old.
-    for (var point in _weeklyWellnessData) {
-      if (point.medicationTaken) {
-        medStreak++;
-      } else {
-        break;
-      }
-    }
+    // Calculate success rate from wellness data
+    final totalDays = _weeklyWellnessData.length;
+    final medicationTakenDays = _weeklyWellnessData.where((p) => p.medicationTaken).length;
+    final successRate = totalDays > 0 
+        ? ((medicationTakenDays / totalDays) * 100).toInt().clamp(0, 100)
+        : 0;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -2830,14 +2956,14 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: _buildMedicationStreakCard(medStreak, 0, isDarkMode),
+                child: _buildSuccessRateCard(successRate, isDarkMode),
               ),
             ],
           ),
           const SizedBox(height: 16),
 
           // AI Care Intelligence Card
-          _buildAICareCard(isDarkMode, medStreak),
+          // _buildAICareCard(isDarkMode, medStreak),
         ],
       ),
     );
@@ -3096,7 +3222,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     debugPrint('Launching $url');
   }
 
-  Widget _buildMedicationStreakCard(int streak, int missed, bool isDarkMode) {
+  Widget _buildSuccessRateCard(int successRate, bool isDarkMode) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -3109,13 +3235,13 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       child: Column(
         children: [
           Icon(
-            Icons.local_fire_department,
-            color: const Color(0xFFFF6B35),
+            Icons.trending_up_rounded,
+            color: AppColors.successGreen,
             size: 28,
           ),
           const SizedBox(height: 8),
           Text(
-            '$streak Days',
+            '$successRate%',
             style: GoogleFonts.inter(
               fontSize: 20,
               fontWeight: FontWeight.w800,
@@ -3126,7 +3252,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           ),
           const SizedBox(height: 2),
           Text(
-            'Meds Streak',
+            'Success Rate',
             style: GoogleFonts.inter(
               fontSize: 11,
               color: isDarkMode

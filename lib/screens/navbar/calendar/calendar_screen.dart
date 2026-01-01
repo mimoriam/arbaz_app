@@ -10,7 +10,21 @@ import 'package:arbaz_app/models/checkin_model.dart';
 /// Represents a check-in entry with details about the day
 
 class CalendarScreen extends StatefulWidget {
-  const CalendarScreen({super.key});
+  /// Optional senior ID for family members to view a senior's calendar.
+  /// If null, uses current user's ID (senior viewing their own calendar).
+  final String? seniorId;
+  
+  /// Optional senior name for display when viewing as family member.
+  final String? seniorName;
+  
+  const CalendarScreen({
+    super.key,
+    this.seniorId,
+    this.seniorName,
+  });
+  
+  /// Check if this is a family member viewing a senior's calendar
+  bool get isFamilyView => seniorId != null;
 
   @override
   State<CalendarScreen> createState() => _CalendarScreenState();
@@ -28,7 +42,6 @@ class _CalendarScreenState extends State<CalendarScreen>
 
   bool _isLoading = true;
   DateTime? _userStartDate;
-  int _currentStreak = 0;
 
   // Derived map for easy lookup by day
   Map<int, List<CheckInRecord>> _checkInsByDay = {};
@@ -51,10 +64,18 @@ class _CalendarScreenState extends State<CalendarScreen>
   }
 
   Future<void> _fetchMonthlyData() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      if (mounted) setState(() => _isLoading = false);
-      return;
+    // Determine which user's data to load
+    // If seniorId is provided (family view), use that; else use current user
+    final String? targetUserId;
+    if (widget.seniorId != null) {
+      targetUserId = widget.seniorId;
+    } else {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        if (mounted) setState(() => _isLoading = false);
+        return;
+      }
+      targetUserId = user.uid;
     }
 
     if (!_isLoading) {
@@ -68,10 +89,10 @@ class _CalendarScreenState extends State<CalendarScreen>
       );
 
       // Load senior state to get startDate and streak
-      final seniorState = await firestoreService.getSeniorState(user.uid);
+      final seniorState = await firestoreService.getSeniorState(targetUserId!);
 
       final checkIns = await firestoreService.getCheckInsForMonth(
-        user.uid,
+        targetUserId,
         _currentMonth.year,
         _currentMonth.month,
       );
@@ -79,7 +100,6 @@ class _CalendarScreenState extends State<CalendarScreen>
 
       setState(() {
         _userStartDate = seniorState?.startDate;
-        _currentStreak = seniorState?.currentStreak ?? 0;
 
         // Group by day
         _checkInsByDay = {};
@@ -302,11 +322,13 @@ class _CalendarScreenState extends State<CalendarScreen>
             ),
           ),
           const Spacer(),
-          // Title
+          // Title - show senior's name if viewing as family member
           Text(
-            'My Progress',
+            widget.isFamilyView 
+                ? "${widget.seniorName ?? 'Senior'}'s Progress"
+                : 'My Progress',
             style: GoogleFonts.inter(
-              fontSize: 22,
+              fontSize: widget.isFamilyView ? 18 : 22,
               fontWeight: FontWeight.w800,
               color: isDarkMode
                   ? AppColors.textPrimaryDark
@@ -323,7 +345,7 @@ class _CalendarScreenState extends State<CalendarScreen>
   }
 
   Widget _buildStreakCard(bool isDarkMode) {
-    // Calculate success rate based on user's start date, not full month
+    // Calculate hybrid success rate: avg of daily (checkIns/scheduled) percentages
     final today = DateTime.now();
     final monthStart = DateTime(_currentMonth.year, _currentMonth.month, 1);
     final monthEnd =
@@ -337,25 +359,52 @@ class _CalendarScreenState extends State<CalendarScreen>
       effectiveStart = _userStartDate!;
     }
 
-    // If the user started after this month ended, show 0% (or handle appropriately)
-    int daysToCount = 0;
-    if (!effectiveStart.isAfter(monthEnd)) {
-      daysToCount = monthEnd.difference(effectiveStart).inDays + 1;
-    }
-
-    // Filter checkInsByDay keys to only count days >= effectiveStart
     final effectiveStartDay =
         effectiveStart.year == _currentMonth.year &&
             effectiveStart.month == _currentMonth.month
         ? effectiveStart.day
         : 1;
 
-    final checkInDays = _checkInsByDay.keys
-        .where((day) => day >= effectiveStartDay)
-        .length;
+    // Count total check-ins for display
+    int totalCheckIns = 0;
+    for (var records in _checkInsByDay.values) {
+      totalCheckIns += records.length;
+    }
 
+    // Calculate hybrid success rate: avg(min(checkIns, scheduled) / scheduled)
+    double totalCompletion = 0.0;
+
+    for (var entry in _checkInsByDay.entries) {
+      final day = entry.key;
+      if (day < effectiveStartDay) continue; // Skip days before user started
+      
+      final dayRecords = entry.value;
+      if (dayRecords.isEmpty) continue;
+      
+      // Get scheduled count from the first record of that day
+      // (all records on same day should have same scheduledCount)
+      final scheduledCount = dayRecords.first.scheduledCount;
+      final checkInCount = dayRecords.length;
+      
+      // Calculate daily completion: min(actual, scheduled) / scheduled
+      // Cap at 100% (extra check-ins don't boost score)
+      final dailyCompletion = scheduledCount > 0
+          ? (checkInCount.clamp(0, scheduledCount) / scheduledCount)
+          : 1.0;
+      
+      totalCompletion += dailyCompletion;
+    }
+
+    // Calculate days user should have checked in (from effective start to now/month end)
+    int daysToCount = 0;
+    if (!effectiveStart.isAfter(monthEnd)) {
+      daysToCount = monthEnd.difference(effectiveStart).inDays + 1;
+    }
+
+    // For days with no check-ins at all, they count as 0% completion
+    // Average = (sum of daily completions) / (total days expected)
     final successRate = daysToCount > 0
-        ? ((checkInDays / daysToCount) * 100).toInt().clamp(0, 100)
+        ? ((totalCompletion / daysToCount) * 100).toInt().clamp(0, 100)
         : 0;
 
     return Container(
@@ -382,13 +431,7 @@ class _CalendarScreenState extends State<CalendarScreen>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          _buildStreakStat('🔥', '$_currentStreak', 'Streak'),
-          Container(
-            width: 1,
-            height: 28,
-            color: Colors.white.withValues(alpha: 0.3),
-          ),
-          _buildStreakStat('✅', '$checkInDays', 'Check-ins'),
+          _buildStreakStat('✅', '$totalCheckIns', 'Check-ins'),
           Container(
             width: 1,
             height: 28,
@@ -396,7 +439,7 @@ class _CalendarScreenState extends State<CalendarScreen>
           ),
           _buildStreakStat(
             '📊',
-            '$successRate%', // Display calculated percentage
+            '$successRate%',
             'Success Rate',
           ),
         ],
@@ -890,22 +933,24 @@ class _CalendarScreenState extends State<CalendarScreen>
     final dayRecords = _checkInsByDay[lookupDate.day];
     final hasCheckIn = dayRecords != null && dayRecords.isNotEmpty;
     
-    CheckInRecord? latestRecord;
+    // Sort records by timestamp (oldest first) for display
+    List<CheckInRecord> sortedRecords = [];
     if (hasCheckIn) {
-      // Create a sorted copy to avoid modifying the original list in place if it's cached/used elsewhere
-      final sortedRecords = List<CheckInRecord>.from(dayRecords);
-      // Sort by timestamp ascending
+      sortedRecords = List<CheckInRecord>.from(dayRecords);
       sortedRecords.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      latestRecord = sortedRecords.last;
     }
 
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final checkInCount = sortedRecords.length;
 
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
           gradient: isDarkMode
@@ -951,150 +996,233 @@ class _CalendarScreenState extends State<CalendarScreen>
                 ),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
 
-            // Date title
+            // Date title with check-in count
             Center(
-              child: Text(
-                /*Use lookupDate instead of _selectedDate for display consistency.
-                The lookupDate variable was created to handle the case where _selectedDate might not be in the
-                current month. However, the displayed date still uses _selectedDate, 
-                which could show an inconsistent date relative to the data being displayed.
-             Center(
-               child: Text(
--                DateFormat('MMMM d, y').format(_selectedDate),
-+                DateFormat('MMMM d, y').format(lookupDate), */
-                DateFormat('MMMM d, y').format(_selectedDate),
-                style: GoogleFonts.inter(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: isDarkMode
-                      ? AppColors.textPrimaryDark
-                      : AppColors.textPrimary,
-                  letterSpacing: -0.5,
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Main Status Card
-            _buildStatusCard(hasCheckIn, latestRecord, isDarkMode),
-
-            // Show details if check-in exists
-            if (hasCheckIn && latestRecord != null) ...[
-              const SizedBox(height: 16),
-
-              // Check-in Time & Mood Row
-              Row(
+              child: Column(
                 children: [
-                  Expanded(
-                    child: _buildInfoChip(
-                      icon: Icons.access_time_rounded,
-                      label: DateFormat(
-                        'h:mm a',
-                      ).format(latestRecord.timestamp),
-                      isDarkMode: isDarkMode,
+                  Text(
+                    DateFormat('MMMM d, y').format(lookupDate),
+                    style: GoogleFonts.inter(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: isDarkMode
+                          ? AppColors.textPrimaryDark
+                          : AppColors.textPrimary,
+                      letterSpacing: -0.5,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  if (latestRecord.mood != null)
-                    Expanded(
-                      child: _buildInfoChip(
-                        icon: Icons.mood,
-                        label: 'Mood: ${_capitalize(latestRecord.mood!)}',
-                        isDarkMode: isDarkMode,
+                  if (checkInCount > 1) ...[
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppColors.successGreen.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '$checkInCount check-ins',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.successGreen,
+                        ),
                       ),
                     ),
+                  ],
                 ],
               ),
+            ),
+            const SizedBox(height: 16),
 
-              if (latestRecord.locationAddress != null) ...[
-                const SizedBox(height: 12),
-                _buildInfoChip(
-                  icon: Icons.location_on_outlined,
-                  label: latestRecord.locationAddress!,
-                  isDarkMode: isDarkMode,
-                ),
-              ],
+            // Main Status Card (overview)
+            _buildStatusCard(hasCheckIn, sortedRecords.isNotEmpty ? sortedRecords.last : null, isDarkMode),
 
+            // Show all check-ins if any exist
+            if (hasCheckIn) ...[
               const SizedBox(height: 16),
-
-              // Simple Stats for the day
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: isDarkMode
-                      ? AppColors.backgroundDark
-                      : AppColors.inputFillLight,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Column(
-                  children: [
-                    if (latestRecord.sleep != null)
-                      _buildSimpleRow(
-                        'Sleep Quality',
-                        _capitalize(latestRecord.sleep!),
-                        isDarkMode,
-                      ),
-                    if (latestRecord.energy != null) ...[
-                      const SizedBox(height: 8),
-                      _buildSimpleRow(
-                        'Energy Level',
-                        _capitalize(latestRecord.energy!),
-                        isDarkMode,
-                      ),
-                    ],
-                    if (latestRecord.medication != null) ...[
-                      const SizedBox(height: 8),
-                      _buildSimpleRow(
-                        'Medication',
-                        latestRecord.medication == 'yes'
-                            ? 'Taken'
-                            : latestRecord.medication == 'not_yet'
-                            ? 'Not yet'
-                            : latestRecord.medication == 'skipped'
-                            ? 'Skipped'
-                            : latestRecord.medication!,
-                        isDarkMode,
-                      ),
-                    ],
-                  ],
+              
+              // Scrollable list of check-ins
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: sortedRecords.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, index) {
+                    final record = sortedRecords[index];
+                    return _buildCheckInCard(record, index + 1, isDarkMode);
+                  },
                 ),
               ),
             ],
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildSimpleRow(String label, String value, bool isDarkMode) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(
-          label,
-          style: GoogleFonts.inter(
-            color: isDarkMode
-                ? AppColors.textSecondaryDark
-                : AppColors.textSecondary,
-            fontWeight: FontWeight.w500,
-          ),
+  /// Builds a compact card for a single check-in record
+  Widget _buildCheckInCard(CheckInRecord record, int number, bool isDarkMode) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isDarkMode
+            ? AppColors.backgroundDark
+            : AppColors.inputFillLight,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
         ),
-        Text(
-          value,
-          style: GoogleFonts.inter(
-            color: isDarkMode
-                ? AppColors.textPrimaryDark
-                : AppColors.textPrimary,
-            fontWeight: FontWeight.w600,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header row: check-in number, time, mood
+          Row(
+            children: [
+              // Check-in number badge
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: AppColors.primaryBlue,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Center(
+                  child: Text(
+                    '$number',
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              // Time
+              Icon(
+                Icons.access_time_rounded,
+                size: 14,
+                color: isDarkMode
+                    ? AppColors.textSecondaryDark
+                    : AppColors.textSecondary,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                DateFormat('h:mm a').format(record.timestamp),
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: isDarkMode
+                      ? AppColors.textPrimaryDark
+                      : AppColors.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              // Mood if available
+              if (record.mood != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _getMoodColor(record.mood!).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    _capitalize(record.mood!),
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: _getMoodColor(record.mood!),
+                    ),
+                  ),
+                ),
+            ],
           ),
-        ),
-      ],
+          
+          // Details row (compact)
+          if (record.sleep != null || record.energy != null || record.medication != null) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                if (record.sleep != null)
+                  _buildMiniChip('💤', _capitalize(record.sleep!), isDarkMode),
+                if (record.energy != null)
+                  _buildMiniChip('⚡', _capitalize(record.energy!), isDarkMode),
+                if (record.medication != null)
+                  _buildMiniChip(
+                    '💊',
+                    record.medication == 'yes' ? 'Taken' 
+                        : record.medication == 'not_yet' ? 'Not yet'
+                        : record.medication == 'skipped' ? 'Skipped'
+                        : _capitalize(record.medication!),
+                    isDarkMode,
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
     );
+  }
+
+  /// Builds a mini chip for compact display of check-in details
+  Widget _buildMiniChip(String emoji, String label, bool isDarkMode) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: isDarkMode
+            ? AppColors.surfaceDark
+            : Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 11)),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              color: isDarkMode
+                  ? AppColors.textSecondaryDark
+                  : AppColors.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Returns a color based on mood type
+  Color _getMoodColor(String mood) {
+    switch (mood.toLowerCase()) {
+      case 'great':
+      case 'good':
+      case 'happy':
+        return AppColors.successGreen;
+      case 'okay':
+      case 'neutral':
+        return AppColors.warningOrange;
+      case 'sad':
+      case 'bad':
+      case 'awful':
+      case 'down':
+      case 'very_sad':
+        return AppColors.dangerRed;
+      default:
+        return AppColors.primaryBlue;
+    }
   }
 
   /// Capitalizes the first letter of a string and handles underscores
@@ -1190,49 +1318,6 @@ class _CalendarScreenState extends State<CalendarScreen>
                     ),
                   ),
               ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoChip({
-    required IconData icon,
-    required String label,
-    required bool isDarkMode,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: isDarkMode ? AppColors.backgroundDark : AppColors.inputFillLight,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: 16,
-            color: isDarkMode
-                ? AppColors.textSecondaryDark
-                : AppColors.textSecondary,
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              label,
-              style: GoogleFonts.inter(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: isDarkMode
-                    ? AppColors.textPrimaryDark
-                    : AppColors.textPrimary,
-              ),
-              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
