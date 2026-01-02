@@ -23,6 +23,10 @@ class CheckInRecord {
   /// Defaults to 1 for backward compatibility.
   final int scheduledCount;
 
+  /// Which schedule time(s) this check-in satisfied, e.g., ["9:00 AM", "11:00 AM"]
+  /// For multi check-in support - tracks past-due schedules satisfied by this check-in.
+  final List<String> scheduledFor;
+
   CheckInRecord({
     required this.id,
     required this.userId,
@@ -36,6 +40,7 @@ class CheckInRecord {
     this.longitude,
     this.locationAddress,
     this.scheduledCount = 1,
+    this.scheduledFor = const [],
   });
 
   factory CheckInRecord.fromFirestore(DocumentSnapshot doc) {
@@ -67,6 +72,7 @@ class CheckInRecord {
       longitude: (data['longitude'] as num?)?.toDouble(),
       locationAddress: data['locationAddress'],
       scheduledCount: (data['scheduledCount'] as int?) ?? 1,
+      scheduledFor: (data['scheduledFor'] as List?)?.map((e) => e.toString()).toList() ?? [],
     );
   }
 
@@ -83,6 +89,7 @@ class CheckInRecord {
       'longitude': longitude,
       'locationAddress': locationAddress,
       'scheduledCount': scheduledCount,
+      'scheduledFor': scheduledFor,
     };
   }
 
@@ -100,6 +107,7 @@ class CheckInRecord {
     double? longitude,
     String? locationAddress,
     int? scheduledCount,
+    List<String>? scheduledFor,
   }) {
     return CheckInRecord(
       id: id ?? this.id,
@@ -114,6 +122,7 @@ class CheckInRecord {
       longitude: longitude ?? this.longitude,
       locationAddress: locationAddress ?? this.locationAddress,
       scheduledCount: scheduledCount ?? this.scheduledCount,
+      scheduledFor: scheduledFor ?? this.scheduledFor,
     );
   }
 }

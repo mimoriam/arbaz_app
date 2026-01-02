@@ -151,6 +151,78 @@ DateTime? calculateNextExpectedCheckIn(
   return nextToday ?? earliestToday ?? earliestTomorrow;
 }
 
+/// Calculate which schedule times have passed today and haven't been satisfied yet.
+/// Returns list of schedule strings (e.g., ["9:00 AM", "11:00 AM"]) that should be
+/// marked as completed when user checks in now.
+/// 
+/// Used for multi check-in support where one check-in satisfies all past-due schedules.
+List<String> getPendingSchedules(
+  List<String> allSchedules,
+  List<String> completedSchedules,
+  DateTime now,
+) {
+  final pending = <String>[];
+  
+  for (final schedule in allSchedules) {
+    // Skip if already completed today
+    if (completedSchedules.contains(schedule.toUpperCase()) ||
+        completedSchedules.contains(schedule)) {
+      continue;
+    }
+    
+    final parsed = _parseScheduleTime(schedule);
+    if (parsed == null) continue;
+    
+    // Calculate today's time for this schedule
+    final scheduleTime = DateTime(
+      now.year, now.month, now.day,
+      parsed.hours, parsed.minutes,
+    );
+    
+    // If schedule time has passed, it's pending
+    if (now.isAfter(scheduleTime) || now.isAtSameMomentAs(scheduleTime)) {
+      pending.add(schedule.toUpperCase());
+    }
+  }
+  
+  return pending;
+}
+
+/// Check if all schedules for today have been completed.
+/// Used to determine if check-in button should be disabled.
+bool areAllSchedulesCompleted(
+  List<String> allSchedules,
+  List<String> completedSchedules,
+  DateTime now,
+) {
+  for (final schedule in allSchedules) {
+    final scheduleUpper = schedule.toUpperCase();
+    
+    // Check if this schedule has been completed
+    if (completedSchedules.contains(scheduleUpper) ||
+        completedSchedules.contains(schedule)) {
+      continue;
+    }
+    
+    final parsed = _parseScheduleTime(schedule);
+    if (parsed == null) continue;
+    
+    // Calculate today's time for this schedule
+    final scheduleTime = DateTime(
+      now.year, now.month, now.day,
+      parsed.hours, parsed.minutes,
+    );
+    
+    // If schedule time has passed and not completed, not all done
+    if (now.isAfter(scheduleTime) || now.isAtSameMomentAs(scheduleTime)) {
+      return false;
+    }
+  }
+  
+  // All past-due schedules are completed
+  return true;
+}
+
 /// Retry a Future with exponential backoff for transient failures
 /// Useful for critical Firestore operations that may fail due to network issues
 Future<T> retryWithBackoff<T>(
@@ -231,8 +303,13 @@ class FirestoreService {
     try {
       return UserProfile.fromFirestore(doc);
     } catch (e) {
-      // ignore: avoid_print - debugPrint unavailable in pure Dart file
-      print('Invalid profile data for user $uid: $e');
+      // Use debugPrint for consistent logging (imported via constants.dart -> foundation)
+      // Note: debugPrint works in pure Dart when flutter/foundation.dart is imported elsewhere
+      assert(() {
+        // ignore: avoid_print - debugPrint equivalent for release mode
+        print('FirestoreService: Invalid profile data for user $uid: $e');
+        return true;
+      }());
       return null; // Return null for malformed profiles
     }
   }
@@ -375,6 +452,23 @@ class FirestoreService {
     }
   }
 
+  /// Triggers an SOS alert - sets sosActive to true and records timestamp
+  /// This is called when senior taps the emergency SOS button
+  Future<void> triggerSOS(String uid) async {
+    await _seniorStateRef(uid).set({
+      'sosActive': true,
+      'sosTriggeredAt': Timestamp.now(),
+    }, SetOptions(merge: true));
+  }
+
+  /// Resolves an SOS alert - sets sosActive to false
+  /// Called by family member to acknowledge the alert
+  Future<void> resolveSOS(String uid) async {
+    await _seniorStateRef(uid).set({
+      'sosActive': false,
+    }, SetOptions(merge: true));
+  }
+
   /// Stream senior state for real-time updates (avoids polling)
   Stream<SeniorState?> streamSeniorState(String seniorUid) {
     if (seniorUid.isEmpty) return Stream.value(null);
@@ -491,16 +585,23 @@ class FirestoreService {
   // ===== Check-in Operations =====
   
   /// Records a check-in atomically using a transaction to prevent race conditions
+  /// For multi check-in support, this satisfies all past-due schedules not yet completed.
   Future<void> recordCheckIn(String uid, CheckInRecord record) async {
     final seniorStateRef = _seniorStateRef(uid);
     final profileRef = _profileRef(uid);
     
     await _db.runTransaction((transaction) async {
+      // Capture timestamp once at start for consistent day-boundary logic
+      final now = DateTime.now();
+      
       // 1. Read senior state within transaction
       final seniorStateDoc = await transaction.get(seniorStateRef);
       
       int newStreak = 1;
       DateTime startDate = DateTime.now();
+      List<String> schedules = ['11:00 AM'];
+      List<String> completedSchedulesToday = [];
+      DateTime? lastScheduleResetDate;
       
       if (seniorStateDoc.exists) {
         final rawData = seniorStateDoc.data();
@@ -514,7 +615,34 @@ class FirestoreService {
             startDate = (data['startDate'] as Timestamp).toDate();
           }
           
-          // Get last check-in
+          // Get schedules
+          if (data['checkInSchedules'] is List) {
+            schedules = (data['checkInSchedules'] as List)
+                .map((e) => e.toString())
+                .toList();
+          }
+          
+          // Get completed schedules and reset date
+          if (data['completedSchedulesToday'] is List) {
+            completedSchedulesToday = (data['completedSchedulesToday'] as List)
+                .map((e) => e.toString())
+                .toList();
+          }
+          if (data['lastScheduleResetDate'] is Timestamp) {
+            lastScheduleResetDate = (data['lastScheduleResetDate'] as Timestamp).toDate();
+          }
+          
+          final isNewDay = lastScheduleResetDate == null ||
+              lastScheduleResetDate.year != now.year ||
+              lastScheduleResetDate.month != now.month ||
+              lastScheduleResetDate.day != now.day;
+          
+          if (isNewDay) {
+            completedSchedulesToday = [];
+            lastScheduleResetDate = now;
+          }
+          
+          // Get last check-in for streak calculation
           final lastCheckInTimestamp = data['lastCheckIn'] as Timestamp?;
           if (lastCheckInTimestamp != null) {
             final lastCheckIn = lastCheckInTimestamp.toDate();
@@ -543,38 +671,41 @@ class FirestoreService {
         }
       }
       
-      // 2. Create check-in document with auto-id
-      final checkInDocRef = _checkInsRef(uid).doc();
-      transaction.set(checkInDocRef, record.toFirestore());
+      // 2. Calculate which schedules this check-in satisfies
+      final satisfiedSchedules = getPendingSchedules(
+        schedules,
+        completedSchedulesToday,
+        now,
+      );
       
-      // 3. Update senior state with streak info and nextExpectedCheckIn
-      // Get schedules for nextExpectedCheckIn calculation
-      List<String> schedules = ['11:00 AM'];
-      if (seniorStateDoc.exists) {
-        final rawData = seniorStateDoc.data();
-        if (rawData != null && rawData is Map<String, dynamic>) {
-          final data = rawData;
-          if (data['checkInSchedules'] is List) {
-            schedules = (data['checkInSchedules'] as List)
-                .map((e) => e.toString())
-                .toList();
-          }
-        }
-      }
+      // Add satisfied schedules to completed list
+      final updatedCompleted = [...completedSchedulesToday, ...satisfiedSchedules];
+      
+      // 3. Create check-in document with scheduledFor field populated
+      final checkInWithSchedule = record.copyWith(
+        scheduledFor: satisfiedSchedules,
+      );
+      final checkInDocRef = _checkInsRef(uid).doc();
+      transaction.set(checkInDocRef, checkInWithSchedule.toFirestore());
+      
+      // 4. Calculate next expected check-in
       final nextExpected = calculateNextExpectedCheckIn(
         schedules,
-        DateTime.now(),
+        now,
         record.timestamp,
       );
       
+      // 5. Update senior state with all multi check-in tracking
       transaction.set(seniorStateRef, {
         'lastCheckIn': Timestamp.fromDate(record.timestamp),
         'currentStreak': newStreak,
         'startDate': Timestamp.fromDate(startDate),
+        'completedSchedulesToday': updatedCompleted,
+        'lastScheduleResetDate': Timestamp.fromDate(lastScheduleResetDate ?? now),
         if (nextExpected != null) 'nextExpectedCheckIn': Timestamp.fromDate(nextExpected),
       }, SetOptions(merge: true));
       
-      // 4. If location info is present, update user profile location
+      // 6. If location info is present, update user profile location
       if (record.latitude != null && record.longitude != null) {
         final Map<String, dynamic> locationUpdates = {
           'latitude': record.latitude,

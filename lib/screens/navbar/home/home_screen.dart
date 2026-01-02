@@ -50,7 +50,10 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     with SingleTickerProviderStateMixin {
   SafetyStatus _currentStatus = SafetyStatus.safe;
   bool _isSendingHelp = false;
-  bool _hasCheckedInToday = false;
+  bool _hasCheckedInToday = false; // Legacy - kept for backward compat during refactor
+  bool _allSchedulesCompleted = false; // True when ALL scheduled check-ins are done
+  List<String> _completedSchedulesToday = []; // Schedules satisfied today
+  List<String> _allSchedules = ['11:00 AM']; // All scheduled check-in times
   bool _isLoadingCheckInStatus =
       true; // Prevents flicker/interaction until status loaded
   HomeAction _activeAction = HomeAction.none;
@@ -106,6 +109,15 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
 
   Future<void> _initData() async {
     try {
+      // Check if app was launched from notification to prevent duplicate local notification
+      final launchDetails = await NotificationService().getNotificationAppLaunchDetails();
+      if (launchDetails?.didNotificationLaunchApp == true && mounted) {
+        debugPrint('App launched from notification - suppressing initial local alert');
+        setState(() {
+          _wasRunningLate = true; // Pretend we already alerted to suppress new one
+        });
+      }
+
       await _loadUserData();
     } catch (e) {
       debugPrint('Error loading user data: $e');
@@ -168,14 +180,35 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       // This ensures the UI updates when nextExpectedCheckIn changes (e.g., from Settings)
       _seniorStateSubscription?.cancel();
       _seniorStateSubscription = firestoreService.streamSeniorState(user.uid).listen(
-        (seniorState) {
+         (seniorState) {
           if (!mounted) return;
           
           if (seniorState != null) {
             final lastCheckIn = seniorState.lastCheckIn;
             final now = DateTime.now();
             
-            // Check if checked in today
+            // Multi check-in tracking: get schedules and completed list from Firestore
+            final schedules = seniorState.checkInSchedules;
+            final completedToday = seniorState.completedSchedulesToday;
+            
+            // Day boundary check: reset completed if lastScheduleResetDate is from a previous day
+            List<String> effectiveCompleted = completedToday;
+            final resetDate = seniorState.lastScheduleResetDate;
+            if (resetDate == null || 
+                resetDate.year != now.year ||
+                resetDate.month != now.month ||
+                resetDate.day != now.day) {
+              effectiveCompleted = [];
+            }
+            
+            // Check if ALL past-due schedules are completed
+            final allCompleted = areAllSchedulesCompleted(
+              schedules,
+              effectiveCompleted,
+              now,
+            );
+            
+            // Legacy: Check if at least one check-in was done today
             final isToday = lastCheckIn != null &&
                 lastCheckIn.year == now.year &&
                 lastCheckIn.month == now.month &&
@@ -190,33 +223,42 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
             
             // Check if using only the default schedule (11:00 AM)
             // If user added custom schedules, those should trigger yellow even on Day 1
-            final hasOnlyDefaultSchedule = seniorState.checkInSchedules.length == 1 &&
-                seniorState.checkInSchedules.first.toUpperCase() == '11:00 AM';
+            final hasOnlyDefaultSchedule = schedules.length == 1 &&
+                schedules.first.toUpperCase() == '11:00 AM';
             
             // Skip "running late" only if it's Day 1 AND using only the default schedule
             final skipDay1Default = isDay1 && hasOnlyDefaultSchedule;
             
-            // Check if running late (past scheduled check-in time)
+            // Check if running late: any past-due schedule not completed
             bool isRunningLate = false;
-            if (!isToday && !skipDay1Default && seniorState.nextExpectedCheckIn != null) {
-              // If we're past the next expected check-in time, we're running late
-              isRunningLate = now.isAfter(seniorState.nextExpectedCheckIn!);
+            if (!allCompleted && !skipDay1Default) {
+              // There are pending schedules that have passed - running late
+              final pendingSchedules = getPendingSchedules(
+                schedules,
+                effectiveCompleted,
+                now,
+              );
+              isRunningLate = pendingSchedules.isNotEmpty;
             }
             
             // Schedule a timer to update status when nextExpectedCheckIn is reached
-            _scheduleCheckInDeadlineTimer(seniorState.nextExpectedCheckIn, isToday || skipDay1Default);
+            _scheduleCheckInDeadlineTimer(seniorState.nextExpectedCheckIn, allCompleted || skipDay1Default);
 
             // Get vacation mode state BEFORE setState for notification logic
             final vacationMode = context.read<VacationModeProvider>().isVacationMode;
             final currentMissedCount = seniorState.missedCheckInsToday;
 
             setState(() {
-              _hasCheckedInToday = isToday;
+              _hasCheckedInToday = isToday; // Legacy compat
+              _allSchedulesCompleted = allCompleted;
+              _completedSchedulesToday = effectiveCompleted;
+              _allSchedules = schedules;
               _currentStreak = seniorState.currentStreak;
               _isLoadingCheckInStatus = false; // Status verified
               _nextExpectedCheckIn = seniorState.nextExpectedCheckIn;
               
-              if (isToday) {
+              if (allCompleted) {
+                // ALL schedules completed - show safe blue (disabled) state
                 _currentStatus = SafetyStatus.safe;
                 _pulseController.stop();
                 // Cancel any pending missed check-in notification
@@ -235,7 +277,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 }
                 _wasRunningLate = true;
               } else {
-                // Default green state (includes Day 1)
+                // Not running late - waiting for next schedule
+                // Keep safe status but button still enabled for early check-in
                 _currentStatus = SafetyStatus.safe;
                 _wasRunningLate = false;
               }
@@ -459,32 +502,46 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     // Store the scheduled time the timer was created for (for TOCTOU validation)
     final DateTime scheduledFor = nextExpectedCheckIn;
     
+    // Capture vacation mode state BEFORE scheduling timer to avoid context access in callback
+    bool isVacationModeAtSchedule;
+    try {
+      isVacationModeAtSchedule = context.read<VacationModeProvider>().isVacationMode;
+    } catch (e) {
+      // Context might already be invalid in edge cases
+      debugPrint('Error reading vacation mode: $e');
+      isVacationModeAtSchedule = false;
+    }
+    
     _checkInDeadlineTimer = Timer(delay, () {
       if (!mounted) return;
       
-      // TOCTOU Check: Validate the scheduled time hasn't changed since timer creation
-      // This prevents notification if user changed schedule while timer was pending
-      if (!_hasCheckedInToday && _nextExpectedCheckIn != null && 
-          _nextExpectedCheckIn!.isAtSameMomentAs(scheduledFor)) {
-        final currentTime = DateTime.now();
-        if (currentTime.isAfter(_nextExpectedCheckIn!)) {
-          setState(() {
-            _currentStatus = SafetyStatus.ok; // Yellow - running late
-          });
-          
-          // Trigger local notification immediately when running late
-          final vacationMode = context.read<VacationModeProvider>().isVacationMode;
-          if (!vacationMode && !_wasRunningLate) {
-            NotificationService().showMissedCheckInNotification(
-              missedCount: 1,
-              isVacationMode: false,
-            );
-            // Update flag to prevent duplicate notification from stream listener
+      try {
+        // TOCTOU Check: Validate the scheduled time hasn't changed since timer creation
+        // This prevents notification if user changed schedule while timer was pending
+        if (!_hasCheckedInToday && _nextExpectedCheckIn != null && 
+            _nextExpectedCheckIn!.isAtSameMomentAs(scheduledFor)) {
+          final currentTime = DateTime.now();
+          if (currentTime.isAfter(_nextExpectedCheckIn!)) {
             setState(() {
-              _wasRunningLate = true;
+              _currentStatus = SafetyStatus.ok; // Yellow - running late
             });
+            
+            // Trigger local notification immediately when running late
+            // Use captured vacation mode to avoid context access
+            if (!isVacationModeAtSchedule && !_wasRunningLate) {
+              NotificationService().showMissedCheckInNotification(
+                missedCount: 1,
+                isVacationMode: false,
+              );
+              // Update flag to prevent duplicate notification from stream listener
+              setState(() {
+                _wasRunningLate = true;
+              });
+            }
           }
         }
+      } catch (e) {
+        debugPrint('Error in check-in deadline timer callback: $e');
       }
     });
   }
@@ -583,9 +640,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     // Add haptic feedback for better UX
     HapticFeedback.mediumImpact();
 
-    // Button is not clickable after check-in, so no toggle needed
-    // This check is redundant now but kept for safety
-    if (_hasCheckedInToday) {
+    // Button is not clickable after all schedules completed
+    if (_allSchedulesCompleted) {
       return;
     }
 
@@ -597,12 +653,10 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           userName: _userName,
           currentStreak: _currentStreak,
           onComplete: () {
+            // State will be updated by Firestore stream when check-in is recorded
+            // No need to manually update _hasCheckedInToday here
+            // Stop pulse animation after successful check-in
             setState(() {
-              _hasCheckedInToday = true;
-              _currentStatus =
-                  SafetyStatus.safe; // Now shows blue "I'M SAFE" button
-              _currentStreak++; // Increment streak on successful check-in
-              // Stop pulse animation after successful check-in
               _pulseController.stop();
               _pulseController.value = 1.0;
             });
@@ -689,13 +743,23 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     );
   }
 
-  void _sendEmergencyAlert() {
+  void _sendEmergencyAlert() async {
     setState(() {
       _isSendingHelp = true;
     });
 
-    // Simulate sending help - in real app, this would trigger actual alerts
-    Future.delayed(const Duration(seconds: 3), () {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (mounted) {
+        setState(() => _isSendingHelp = false);
+      }
+      return;
+    }
+
+    try {
+      // Persist SOS alert to Firestore - this triggers FCM notification via Cloud Function
+      await context.read<FirestoreService>().triggerSOS(user.uid);
+      
       if (mounted) {
         setState(() {
           _isSendingHelp = false;
@@ -714,7 +778,25 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           ),
         );
       }
-    });
+    } catch (e) {
+      debugPrint('Error triggering SOS: $e');
+      if (mounted) {
+        setState(() => _isSendingHelp = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to send alert. Please try again.',
+              style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+            ),
+            backgroundColor: AppColors.dangerRed,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -1070,9 +1152,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     bool isLoading = false,
   }) {
     // Determine the button state and colors based on check-in status
-    // Green: Default (not checked in) - clickable
-    // Blue: After questionnaire completed - NOT clickable
-    // Yellow: Running late (SafetyStatus.ok without questionnaire completion)
+    // Green: Waiting for next schedule (not all past-due checked in)
+    // Blue: ALL schedules completed - NOT clickable
+    // Yellow: Running late (missed a schedule)
 
     Color primaryColor;
     Color secondaryColor;
@@ -1093,15 +1175,21 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           ? "Syncing status..."
           : "Disabled during vacation";
       isClickable = false;
-    } else if (_hasCheckedInToday) {
-      // Blue state - completed questionnaire (not clickable)
+    } else if (_allSchedulesCompleted) {
+      // Blue state - all schedules completed (not clickable)
       primaryColor = const Color(0xFF4DA6FF); // Light blue
       secondaryColor = const Color(0xFF2B8FE5); // Darker blue
       ringColor = const Color(0xFF7EC8FF); // Ring color
       statusIcon = Icons.check;
       statusText = "I'M SAFE";
-      subtitleText = "You've checked in for today";
-      isClickable = false; // Not clickable after completion
+      // Build subtitle showing completed schedules
+      if (_completedSchedulesToday.isNotEmpty) {
+        final times = _completedSchedulesToday.map((s) => s).join(', ');
+        subtitleText = "✓ $times";
+      } else {
+        subtitleText = "All check-ins complete";
+      }
+      isClickable = false; // Not clickable after all schedules completed
     } else if (_currentStatus == SafetyStatus.ok) {
       // Yellow state - running late
       primaryColor = const Color(0xFFFFBF00); // Golden yellow
@@ -1109,16 +1197,22 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       ringColor = const Color(0xFFFFD966); // Light yellow ring
       statusIcon = Icons.priority_high;
       statusText = "I'M OK!";
-      subtitleText = "Tap to tell family I'm okay";
+      subtitleText = "Tap to check in now";
       isClickable = true;
     } else {
-      // Green state - default (not checked in)
+      // Green state - waiting for check-in (may be early)
       primaryColor = const Color(0xFF2ECC71); // Vibrant green
       secondaryColor = const Color(0xFF27AE60); // Darker green
       ringColor = const Color(0xFF58D68D); // Light green ring
       statusIcon = Icons.favorite;
       statusText = "I'M OK";
-      subtitleText = "Tap to tell family I'm okay";
+      // Show next check-in time if available
+      if (_nextExpectedCheckIn != null) {
+        final nextTime = DateFormat('h:mm a').format(_nextExpectedCheckIn!);
+        subtitleText = "Next: $nextTime";
+      } else {
+        subtitleText = "Tap to check in";
+      }
       isClickable = true;
     }
 
@@ -1782,6 +1876,13 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   // Security vault data
   SecurityVault? _vaultData;
   bool _showSensitiveData = false; // Toggle for showing sensitive vault data
+  
+  // Multi check-in tracking - store current senior state for schedule info
+  SeniorState? _currentSeniorState;
+  
+  // Tracking for local notification triggers (detect state changes)
+  bool _previousSosActive = false;
+  int _previousMissedCheckInsToday = 0;
 
   @override
   void initState() {
@@ -2126,8 +2227,78 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       status = SeniorCheckInStatus.pending;
     }
 
-    // Cancel any existing subscription (we don't use streaming anymore for initial load)
+    // Cancel any existing subscription before creating a new one
     _seniorStateSubscription?.cancel();
+    
+    // Subscribe to real-time senior state updates (vacation mode, lastCheckIn, etc.)
+    // This ensures the UI updates immediately when senior toggles vacation mode or checks in
+    _seniorStateSubscription = firestoreService
+        .streamSeniorState(seniorId)
+        .listen(
+      (seniorState) {
+        if (!mounted) return;
+        
+        // Recalculate status from the latest senior state
+        SeniorCheckInStatus newStatus;
+        DateTime? newLastCheckIn = seniorState?.lastCheckIn;
+        String? newTimeString;
+        
+        // SOS alert takes highest priority - override everything
+        if (seniorState?.sosActive == true) {
+          newStatus = SeniorCheckInStatus.alert;
+        } else if (seniorState?.vacationMode == true) {
+          // Vacation mode - show as safe
+          newStatus = SeniorCheckInStatus.safe;
+        } else {
+          // Always use _calculateSeniorStatus to check pending schedules
+          // This ensures family view matches senior view (yellow when pending)
+          newStatus = _calculateSeniorStatus(seniorState, seniorState?.checkInSchedules ?? []);
+          
+          // Set time string from lastCheckIn if available
+          if (newLastCheckIn != null) {
+            newTimeString = DateFormat('HH:mm').format(newLastCheckIn);
+          }
+        }
+        
+        // Trigger local notifications for state changes (before updating state)
+        // SOS Alert: Notify if just became active
+        final bool currentSosActive = seniorState?.sosActive ?? false;
+        if (currentSosActive && !_previousSosActive) {
+          NotificationService().showFamilySOSNotification(
+            seniorId: seniorId,
+            seniorName: srName,
+          );
+        }
+        _previousSosActive = currentSosActive;
+        
+        // Missed Check-in: Notify if count increased
+        final int currentMissed = seniorState?.missedCheckInsToday ?? 0;
+        if (currentMissed > _previousMissedCheckInsToday && currentMissed > 0) {
+          NotificationService().showFamilyMissedCheckInNotification(
+            missedCount: currentMissed,
+            seniorId: seniorId,
+          );
+        }
+        _previousMissedCheckInsToday = currentMissed;
+        
+        setState(() {
+          _currentSeniorState = seniorState;
+          _seniorData = SeniorStatusData(
+            status: newStatus,
+            seniorName: srName,
+            lastCheckIn: newLastCheckIn,
+            timeString: newTimeString,
+            vacationMode: seniorState?.vacationMode ?? false,
+            sosActive: seniorState?.sosActive ?? false,
+          );
+        });
+        
+        debugPrint('📡 Senior state stream update: vacation=${seniorState?.vacationMode}, lastCheckIn=$newLastCheckIn, status=$newStatus, sos=$currentSosActive, missed=$currentMissed');
+      },
+      onError: (error) {
+        debugPrint('⚠️ Error streaming senior state: $error');
+      },
+    );
 
     // Load game results for cognitive index (filtered by selected month)
     List<GameResult> gameResults = [];
@@ -2166,26 +2337,21 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     } catch (e) {
       debugPrint('⚠️ Error loading vault data: $e');
     }
-    
-    // Load SeniorState to get vacation mode
-    SeniorState? seniorState;
-    try {
-      seniorState = await firestoreService.getSeniorState(seniorId);
-      debugPrint('🔍 Senior state loaded: ${seniorState != null}, Vacation: ${seniorState?.vacationMode}');
-    } catch (e) {
-      debugPrint('⚠️ Error loading senior state: $e');
-    }
 
     if (mounted) {
       setState(() {
         _weeklyWellnessData = monthlyWellnessData;
-        _seniorData = SeniorStatusData(
-          status: status,
-          seniorName: srName,
-          lastCheckIn: lastCheckIn,
-          timeString: timeString,
-          vacationMode: seniorState?.vacationMode ?? false,
-        );
+        // Initial status data will be populated by the stream listener above
+        // If stream hasn't emitted yet, use data from history
+        if (_seniorData == null) {
+          _seniorData = SeniorStatusData(
+            status: status,
+            seniorName: srName,
+            lastCheckIn: lastCheckIn,
+            timeString: timeString,
+            vacationMode: false,
+          );
+        }
         _gameResults = gameResults;
         _cognitiveMetrics = CognitiveMetrics.fromResults(gameResults);
         _vaultData = vaultData;
@@ -2193,7 +2359,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       });
     }
     
-    debugPrint('✅ Senior data loaded: $srName, status: $status, games: ${gameResults.length}, vault: ${vaultData != null}');
+    debugPrint('✅ Senior data loaded: $srName, games: ${gameResults.length}, vault: ${vaultData != null}');
   }
 
   /// Called when user switches to a different senior in the dropdown
@@ -2220,15 +2386,28 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     if (state == null) return SeniorCheckInStatus.pending;
 
     final now = DateTime.now();
-
-    // Check for same day check-in
-    if (state.lastCheckIn != null) {
-      final last = state.lastCheckIn!;
-      if (last.year == now.year &&
-          last.month == now.month &&
-          last.day == now.day) {
-        return SeniorCheckInStatus.safe;
-      }
+    
+    // Multi check-in tracking: get completed schedules from Firestore
+    List<String> completedToday = state.completedSchedulesToday;
+    
+    // Day boundary check: reset if lastScheduleResetDate is from a previous day
+    final resetDate = state.lastScheduleResetDate;
+    if (resetDate == null ||
+        resetDate.year != now.year ||
+        resetDate.month != now.month ||
+        resetDate.day != now.day) {
+      completedToday = [];
+    }
+    
+    // Check if ALL past-due schedules are completed
+    final allCompleted = areAllSchedulesCompleted(
+      schedules.isNotEmpty ? schedules : ['11:00 AM'],
+      completedToday,
+      now,
+    );
+    
+    if (allCompleted) {
+      return SeniorCheckInStatus.safe;
     }
 
     // Day 1 logic: skip alerting ONLY for default 11:00 AM schedule
@@ -2249,35 +2428,15 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       }
     }
 
-    // Use nextExpectedCheckIn for accurate "running late" detection
-    // This field is set by the Cloud Functions and kept in sync
-    if (state.nextExpectedCheckIn != null) {
-      if (now.isAfter(state.nextExpectedCheckIn!)) {
-        return SeniorCheckInStatus.alert;
-      }
-    } else {
-      // Fallback: Parse schedules manually if nextExpectedCheckIn not set
-      // This handles legacy data or edge cases
-      final effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
-      
-      for (final schedule in effectiveSchedules) {
-        try {
-          final time = DateFormat('hh:mm a').parse(schedule);
-          final scheduledTime = DateTime(
-            now.year,
-            now.month,
-            now.day,
-            time.hour,
-            time.minute,
-          );
-
-          if (now.isAfter(scheduledTime)) {
-            return SeniorCheckInStatus.alert;
-          }
-        } catch (e) {
-          debugPrint('Error parsing schedule time: $schedule - $e');
-        }
-      }
+    // Check if any schedule is past due and not completed
+    final pendingSchedules = getPendingSchedules(
+      schedules.isNotEmpty ? schedules : ['11:00 AM'],
+      completedToday,
+      now,
+    );
+    
+    if (pendingSchedules.isNotEmpty) {
+      return SeniorCheckInStatus.alert;
     }
 
     return SeniorCheckInStatus.pending;
@@ -3001,7 +3160,14 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
 
           // Dynamic Status Card
           _buildDynamicStatusCard(_seniorData!, isDarkMode),
-          const SizedBox(height: 32),
+          const SizedBox(height: 16),
+
+          // Check-in Progress Cards (only show when there are multiple schedules)
+          if (_currentSeniorState != null &&
+              _currentSeniorState!.checkInSchedules.length > 1) ...[
+            _buildCheckInProgressCards(isDarkMode),
+            const SizedBox(height: 16),
+          ],
 
           // Removed Live Tracking Card as it wasn't requested in update plan but kept structure mostly
           // Replaced with Medication Streak Card or similar/Just Quick Stats
@@ -3197,36 +3363,65 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
         case SeniorCheckInStatus.alert:
           cardColor = AppColors.dangerRed;
           iconColor = Colors.white;
-          icon = Icons.warning_rounded;
-          title = 'Check-in time passed!';
-          subtitle = 'Please check on ${data.seniorName}';
-          actions = [
-            ElevatedButton.icon(
-              onPressed: () => _launchURL('tel:'), // In real app use number
-              icon: const Icon(Icons.call),
-              label: Text('Call ${data.seniorName}'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: AppColors.dangerRed,
+          
+          // Differentiate between SOS alert and missed check-in
+          if (data.sosActive) {
+            icon = Icons.sos_outlined;
+            title = '🚨 SOS Alert from ${data.seniorName}!';
+            subtitle = 'Emergency assistance requested';
+            actions = [
+              ElevatedButton.icon(
+                onPressed: () => _launchURL('tel:'), // In real app use number
+                icon: const Icon(Icons.call),
+                label: Text('Call ${data.seniorName}'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: AppColors.dangerRed,
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Notifications to others sent (Placeholder)'),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.notifications_active),
-              label: const Text('Notify Others'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.white,
-                side: const BorderSide(color: Colors.white),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: () => _resolveSOS(),
+                icon: const Icon(Icons.check_circle),
+                label: const Text('Resolve Alert'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.successGreen,
+                  foregroundColor: Colors.white,
+                ),
               ),
-            ),
-          ];
+            ];
+          } else {
+            icon = Icons.warning_rounded;
+            title = 'Check-in time passed!';
+            subtitle = 'Please check on ${data.seniorName}';
+            actions = [
+              ElevatedButton.icon(
+                onPressed: () => _launchURL('tel:'), // In real app use number
+                icon: const Icon(Icons.call),
+                label: Text('Call ${data.seniorName}'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: AppColors.dangerRed,
+                ),
+              ),
+              const SizedBox(height: 8),
+              // OutlinedButton.icon(
+              //   onPressed: () {
+              //     ScaffoldMessenger.of(context).showSnackBar(
+              //       const SnackBar(
+              //         content: Text('Notifications to others sent (Placeholder)'),
+              //       ),
+              //     );
+              //   },
+              //   icon: const Icon(Icons.notifications_active),
+              //   label: const Text('Notify Others'),
+              //   style: OutlinedButton.styleFrom(
+              //     foregroundColor: Colors.white,
+              //     side: const BorderSide(color: Colors.white),
+              //   ),
+              // ),
+            ];
+          }
           break;
       }
     }
@@ -3283,6 +3478,247 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   void _launchURL(String url) async {
     // Placeholder for url launcher
     debugPrint('Launching $url');
+  }
+
+  /// Resolve SOS alert - marks the alert as handled
+  void _resolveSOS() async {
+    if (_selectedSeniorId == null) return;
+    
+    try {
+      await context.read<FirestoreService>().resolveSOS(_selectedSeniorId!);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Alert resolved',
+              style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+            ),
+            backgroundColor: AppColors.successGreen,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error resolving SOS: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to resolve alert. Please try again.',
+              style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+            ),
+            backgroundColor: AppColors.dangerRed,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  /// Build check-in progress cards showing finished and pending check-ins
+  /// Only displayed when senior has multiple scheduled check-ins
+  Widget _buildCheckInProgressCards(bool isDarkMode) {
+    final state = _currentSeniorState;
+    if (state == null) return const SizedBox.shrink();
+
+    final now = DateTime.now();
+    final allSchedules = state.checkInSchedules;
+    
+    // Get completed schedules (check day boundary)
+    List<String> completedToday = state.completedSchedulesToday;
+    final resetDate = state.lastScheduleResetDate;
+    if (resetDate == null ||
+        resetDate.year != now.year ||
+        resetDate.month != now.month ||
+        resetDate.day != now.day) {
+      completedToday = [];
+    }
+
+    // Calculate finished (green) and pending/overdue (amber) check-ins
+    final finishedCheckIns = <String>[];
+    final pendingCheckIns = <String>[];
+
+    for (final schedule in allSchedules) {
+      final scheduleUpper = schedule.toUpperCase();
+      
+      if (completedToday.contains(scheduleUpper) ||
+          completedToday.contains(schedule)) {
+        // Already completed
+        finishedCheckIns.add(schedule);
+      } else {
+        // Check if the time has passed (overdue/pending)
+        final parsed = _parseScheduleTimeForCheckIn(schedule);
+        if (parsed != null) {
+          final scheduleTime = DateTime(now.year, now.month, now.day,
+              parsed.hour, parsed.minute);
+          if (now.isAfter(scheduleTime)) {
+            // Time has passed - overdue
+            pendingCheckIns.add(schedule);
+          }
+          // Future times are not shown
+        }
+      }
+    }
+
+    return Row(
+      children: [
+        // Finished Check-ins Card (Green)
+        Expanded(
+          child: _buildCheckInCard(
+            title: 'Finished',
+            count: finishedCheckIns.length,
+            total: allSchedules.length,
+            times: finishedCheckIns,
+            color: AppColors.successGreen,
+            icon: Icons.check_circle,
+            isDarkMode: isDarkMode,
+          ),
+        ),
+        const SizedBox(width: 12),
+        // Pending Check-ins Card (Amber/Orange)
+        Expanded(
+          child: _buildCheckInCard(
+            title: 'Pending',
+            count: pendingCheckIns.length,
+            total: allSchedules.length,
+            times: pendingCheckIns,
+            color: pendingCheckIns.isEmpty
+                ? AppColors.textSecondary
+                : const Color(0xFFFFBF00), // Amber
+            icon: pendingCheckIns.isEmpty
+                ? Icons.check_circle_outline
+                : Icons.access_time_filled,
+            isDarkMode: isDarkMode,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Parse schedule time string to TimeOfDay
+  DateTime? _parseScheduleTimeForCheckIn(String schedule) {
+    try {
+      final format = DateFormat('h:mm a');
+      return format.parse(schedule.toUpperCase());
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Build a single check-in status card
+  Widget _buildCheckInCard({
+    required String title,
+    required int count,
+    required int total,
+    required List<String> times,
+    required Color color,
+    required IconData icon,
+    required bool isDarkMode,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: color.withValues(alpha: 0.3),
+          width: 1.5,
+        ),
+        boxShadow: isDarkMode ? null : [
+          BoxShadow(
+            color: color.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, size: 18, color: color),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: isDarkMode
+                      ? AppColors.textPrimaryDark
+                      : AppColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Count display
+          RichText(
+            text: TextSpan(
+              children: [
+                TextSpan(
+                  text: '$count',
+                  style: GoogleFonts.inter(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+                TextSpan(
+                  text: ' / $total',
+                  style: GoogleFonts.inter(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    color: isDarkMode
+                        ? AppColors.textSecondaryDark
+                        : AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Times list
+          if (times.isNotEmpty)
+            Text(
+              times.join(', '),
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                color: isDarkMode
+                    ? AppColors.textSecondaryDark
+                    : AppColors.textSecondary,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            )
+          else
+            Text(
+              title == 'Pending' ? 'All caught up!' : 'None yet',
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+                color: isDarkMode
+                    ? AppColors.textSecondaryDark
+                    : AppColors.textSecondary,
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   Widget _buildSuccessRateCard(int successRate, bool isDarkMode) {

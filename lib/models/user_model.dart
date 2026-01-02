@@ -206,10 +206,20 @@ class SeniorState {
   final DateTime? lastMissedCheckIn; // Timestamp of most recent missed check-in
   final DateTime? nextExpectedCheckIn; // For scalable Cloud Function queries
   
+  // Multi check-in tracking
+  /// List of schedule times completed today, e.g., ["9:00 AM", "11:00 AM"]
+  final List<String> completedSchedulesToday;
+  /// Date when completedSchedulesToday was last reset (for day boundary detection)
+  final DateTime? lastScheduleResetDate;
+  
   // Cloud Tasks fields
   final String? activeTaskId; // Cloud Tasks task name for pending check-in
   final int consecutiveMissedDays; // Counter for escalation (reset on check-in)
   final DateTime? lastEscalationNotificationAt; // Rate-limit escalation alerts
+  
+  // SOS Alert tracking
+  final bool sosActive; // True when SOS alert is active
+  final DateTime? sosTriggeredAt; // When SOS was triggered (for cooldown)
 
   SeniorState({
     this.lastCheckIn,
@@ -225,9 +235,13 @@ class SeniorState {
     this.missedCheckInsToday = 0,
     this.lastMissedCheckIn,
     this.nextExpectedCheckIn,
+    this.completedSchedulesToday = const [],
+    this.lastScheduleResetDate,
     this.activeTaskId,
     this.consecutiveMissedDays = 0,
     this.lastEscalationNotificationAt,
+    this.sosActive = false,
+    this.sosTriggeredAt,
   });
 
   factory SeniorState.fromFirestore(DocumentSnapshot doc) {
@@ -249,6 +263,16 @@ class SeniorState {
     if (data['checkInSchedules'] is List) {
       final list = data['checkInSchedules'] as List;
       schedules = list
+          .where((item) => item != null)
+          .map((item) => item.toString())
+          .toList();
+    }
+
+    // Parse completedSchedulesToday safely
+    List<String> completedSchedules = [];
+    if (data['completedSchedulesToday'] is List) {
+      final list = data['completedSchedulesToday'] as List;
+      completedSchedules = list
           .where((item) => item != null)
           .map((item) => item.toString())
           .toList();
@@ -278,10 +302,18 @@ class SeniorState {
       nextExpectedCheckIn: data['nextExpectedCheckIn'] is Timestamp
           ? (data['nextExpectedCheckIn'] as Timestamp).toDate()
           : null,
+      completedSchedulesToday: completedSchedules,
+      lastScheduleResetDate: data['lastScheduleResetDate'] is Timestamp
+          ? (data['lastScheduleResetDate'] as Timestamp).toDate()
+          : null,
       activeTaskId: data['activeTaskId'] as String?,
       consecutiveMissedDays: (data['consecutiveMissedDays'] as num?)?.toInt() ?? 0,
       lastEscalationNotificationAt: data['lastEscalationNotificationAt'] is Timestamp
           ? (data['lastEscalationNotificationAt'] as Timestamp).toDate()
+          : null,
+      sosActive: data['sosActive'] == true,
+      sosTriggeredAt: data['sosTriggeredAt'] is Timestamp
+          ? (data['sosTriggeredAt'] as Timestamp).toDate()
           : null,
     );
   }
@@ -303,9 +335,13 @@ class SeniorState {
       'missedCheckInsToday': missedCheckInsToday,
       'lastMissedCheckIn': lastMissedCheckIn != null ? Timestamp.fromDate(lastMissedCheckIn!) : null,
       'nextExpectedCheckIn': nextExpectedCheckIn != null ? Timestamp.fromDate(nextExpectedCheckIn!) : null,
+      'completedSchedulesToday': completedSchedulesToday,
+      'lastScheduleResetDate': lastScheduleResetDate != null ? Timestamp.fromDate(lastScheduleResetDate!) : null,
       'activeTaskId': activeTaskId,
       'consecutiveMissedDays': consecutiveMissedDays,
       'lastEscalationNotificationAt': lastEscalationNotificationAt != null ? Timestamp.fromDate(lastEscalationNotificationAt!) : null,
+      'sosActive': sosActive,
+      'sosTriggeredAt': sosTriggeredAt != null ? Timestamp.fromDate(sosTriggeredAt!) : null,
     };
   }
 
@@ -323,9 +359,13 @@ class SeniorState {
     int? missedCheckInsToday,
     DateTime? lastMissedCheckIn,
     DateTime? nextExpectedCheckIn,
+    List<String>? completedSchedulesToday,
+    DateTime? lastScheduleResetDate,
     String? activeTaskId,
     int? consecutiveMissedDays,
     DateTime? lastEscalationNotificationAt,
+    bool? sosActive,
+    DateTime? sosTriggeredAt,
   }) {
     return SeniorState(
       lastCheckIn: lastCheckIn ?? this.lastCheckIn,
@@ -342,9 +382,13 @@ class SeniorState {
       missedCheckInsToday: missedCheckInsToday ?? this.missedCheckInsToday,
       lastMissedCheckIn: lastMissedCheckIn ?? this.lastMissedCheckIn,
       nextExpectedCheckIn: nextExpectedCheckIn ?? this.nextExpectedCheckIn,
+      completedSchedulesToday: completedSchedulesToday ?? this.completedSchedulesToday,
+      lastScheduleResetDate: lastScheduleResetDate ?? this.lastScheduleResetDate,
       activeTaskId: activeTaskId ?? this.activeTaskId,
       consecutiveMissedDays: consecutiveMissedDays ?? this.consecutiveMissedDays,
       lastEscalationNotificationAt: lastEscalationNotificationAt ?? this.lastEscalationNotificationAt,
+      sosActive: sosActive ?? this.sosActive,
+      sosTriggeredAt: sosTriggeredAt ?? this.sosTriggeredAt,
     );
   }
 }

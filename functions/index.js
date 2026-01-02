@@ -18,6 +18,8 @@ const logger = require("firebase-functions/logger");
 const { DateTime } = require("luxon");
 const { CloudTasksClient } = require("@google-cloud/tasks");
 
+const admin = require("firebase-admin");
+
 // Import shared constants (keep in sync with lib/utils/constants.dart)
 const {
   DEFAULT_CHECK_IN_SCHEDULE,
@@ -31,8 +33,10 @@ const {
   ESCALATION_THRESHOLD_DAYS,
 } = require("./constants");
 
-// Initialize Firebase Admin
-initializeApp();
+// Initialize Firebase Admin (guarded to prevent duplicate initialization)
+if (!admin.apps.length) {
+  initializeApp();
+}
 const db = getFirestore();
 const tasksClient = new CloudTasksClient();
 
@@ -84,13 +88,15 @@ function parseScheduleToTime(schedule) {
 /**
  * Calculate the next expected check-in time based on schedules
  * Uses Luxon for timezone-aware date handling
+ * For multi check-in support, considers which schedules are already completed today
  * @param {Array<string>} schedules - Check-in schedule times
  * @param {Date} now - Current time
  * @param {Date|null} lastCheckIn - Last check-in time
  * @param {string|null} userTimezone - User's IANA timezone (optional, defaults to TIMEZONE constant)
+ * @param {Array<string>} completedSchedulesToday - List of schedule times already completed today
  * @returns {Date|null} - JS Date object for caller compatibility
  */
-function calculateNextExpectedCheckIn(schedules, now, lastCheckIn, userTimezone = null) {
+function calculateNextExpectedCheckIn(schedules, now, lastCheckIn, userTimezone = null, completedSchedulesToday = []) {
   const effectiveSchedules = schedules?.length ? schedules : ["11:00 AM"];
   
   // Use user's timezone if provided, otherwise fall back to default
@@ -100,47 +106,42 @@ function calculateNextExpectedCheckIn(schedules, now, lastCheckIn, userTimezone 
   
   // Convert to timezone-aware DateTime
   const nowInZone = DateTime.fromJSDate(now, { zone: tz });
-  const lastCheckInInZone = lastCheckIn 
-    ? DateTime.fromJSDate(lastCheckIn, { zone: tz }) 
-    : null;
-  
-  // Check if checked in today using timezone-aware comparison
-  const checkedInToday = lastCheckInInZone && 
-    nowInZone.hasSame(lastCheckInInZone, "day");
-
-  if (checkedInToday) {
-    // Find earliest schedule tomorrow
-    const tomorrowInZone = nowInZone.plus({ days: 1 });
-    
-    let earliest = null;
-    for (const schedule of effectiveSchedules) {
-      const parsed = parseScheduleToTime(schedule);
-      if (!parsed) continue;
-      
-      const scheduleTime = tomorrowInZone.set({ 
-        hour: parsed.hours, 
-        minute: parsed.minutes, 
-        second: 0, 
-        millisecond: 0 
-      });
-      
-      if (!earliest || scheduleTime < earliest) {
-        earliest = scheduleTime;
-      }
-    }
-    return earliest ? earliest.toJSDate() : null;
-  }
-
-  // Find next schedule today or tomorrow
-  // Also track earliest today (even if passed) for "running late" detection
-  let nextToday = null;
-  let earliestToday = null; // For "running late" detection
-  let earliestTomorrow = null;
   const tomorrowInZone = nowInZone.plus({ days: 1 });
+  
+  // Normalize completed schedules for comparison
+  const completedSet = new Set(
+    (completedSchedulesToday || []).map(s => s.toUpperCase().trim())
+  );
+  
+  // Check if ALL past-due schedules are completed
+  const allPastDueCompleted = effectiveSchedules.every(schedule => {
+    const parsed = parseScheduleToTime(schedule);
+    if (!parsed) return true;
+    
+    const scheduleTime = nowInZone.set({ 
+      hour: parsed.hours, 
+      minute: parsed.minutes, 
+      second: 0, 
+      millisecond: 0 
+    });
+    
+    // If schedule hasn't passed yet, it doesn't count as past-due
+    if (scheduleTime > nowInZone) return true;
+    
+    // Check if this past-due schedule is completed
+    return completedSet.has(schedule.toUpperCase().trim());
+  });
+  
+  // Find next pending schedule today (not completed and in the future)
+  let nextPendingToday = null;
+  let earliestPastDueToday = null; // For "running late" detection
+  let earliestTomorrow = null;
   
   for (const schedule of effectiveSchedules) {
     const parsed = parseScheduleToTime(schedule);
     if (!parsed) continue;
+    
+    const isCompleted = completedSet.has(schedule.toUpperCase().trim());
     
     const todayTime = nowInZone.set({ 
       hour: parsed.hours, 
@@ -149,14 +150,17 @@ function calculateNextExpectedCheckIn(schedules, now, lastCheckIn, userTimezone 
       millisecond: 0 
     });
     
-    // Track earliest schedule for today (even if passed - for running late detection)
-    if (!earliestToday || todayTime < earliestToday) {
-      earliestToday = todayTime;
+    // Track earliest past-due incomplete schedule for "running late" detection
+    if (!isCompleted && todayTime <= nowInZone) {
+      if (!earliestPastDueToday || todayTime < earliestPastDueToday) {
+        earliestPastDueToday = todayTime;
+      }
     }
     
-    if (todayTime > nowInZone) {
-      if (!nextToday || todayTime < nextToday) {
-        nextToday = todayTime;
+    // Track next future schedule today that's not completed
+    if (!isCompleted && todayTime > nowInZone) {
+      if (!nextPendingToday || todayTime < nextPendingToday) {
+        nextPendingToday = todayTime;
       }
     }
     
@@ -172,11 +176,68 @@ function calculateNextExpectedCheckIn(schedules, now, lastCheckIn, userTimezone 
     }
   }
   
-  // If there's an upcoming schedule today, use it
-  // Otherwise, if all today's schedules have passed, return earliest today for "running late" detection
-  // Only fall back to tomorrow if there are no schedules today at all
-  const result = nextToday || earliestToday || earliestTomorrow;
+  // Priority: 
+  // 1. Next pending future today
+  // 2. Past-due incomplete (for "running late" detection)
+  // 3. Earliest tomorrow (if all today's schedules are done or no schedules today)
+  let result;
+  if (nextPendingToday) {
+    result = nextPendingToday;
+  } else if (earliestPastDueToday) {
+    result = earliestPastDueToday;
+  } else {
+    // All today's schedules done OR no past-due schedules - go to tomorrow
+    result = earliestTomorrow;
+  }
+  
   return result ? result.toJSDate() : null;
+}
+
+/**
+ * Get list of schedule times that have passed but are not yet completed
+ * Used for multi check-in tracking
+ * @param {Array<string>} schedules - All scheduled times
+ * @param {Array<string>} completedSchedules - Already completed schedules
+ * @param {Date} now - Current time
+ * @param {string} userTimezone - User's timezone
+ * @returns {Array<string>} - List of pending past-due schedules
+ */
+function getPendingSchedules(schedules, completedSchedules, now, userTimezone) {
+  const effectiveSchedules = schedules?.length ? schedules : ["11:00 AM"];
+  const tz = userTimezone && typeof userTimezone === 'string' && userTimezone.trim() 
+    ? userTimezone.trim() 
+    : TIMEZONE;
+  
+  const nowInZone = DateTime.fromJSDate(now, { zone: tz });
+  const completedSet = new Set(
+    (completedSchedules || []).map(s => s.toUpperCase().trim())
+  );
+  
+  const pending = [];
+  
+  for (const schedule of effectiveSchedules) {
+    const normalizedSchedule = schedule.toUpperCase().trim();
+    
+    // Skip if already completed
+    if (completedSet.has(normalizedSchedule)) continue;
+    
+    const parsed = parseScheduleToTime(schedule);
+    if (!parsed) continue;
+    
+    const scheduleTime = nowInZone.set({ 
+      hour: parsed.hours, 
+      minute: parsed.minutes, 
+      second: 0, 
+      millisecond: 0 
+    });
+    
+    // If schedule time has passed, it's pending
+    if (nowInZone >= scheduleTime) {
+      pending.push(normalizedSchedule);
+    }
+  }
+  
+  return pending;
 }
 
 /**
@@ -839,10 +900,72 @@ exports.handleMissedCheckIn = onRequest({
     });
     
     // Send FCM push notification outside transaction (non-blocking)
-    // missedCount is now properly defined from transaction return value
     if (missedCount != null && missedCount > 0) {
       try {
+        // 1. Notify the Senior
         await sendMissedCheckInNotification(userId, missedCount);
+        
+        // 2. Notify Linked Family Members
+        // Use top-level connections collection (same pattern as onSOSTriggered)
+        // This ensures consistent lookup across all notification types
+        const connectionsSnapshot = await db.collection("connections")
+          .where("seniorId", "==", userId)
+          .where("status", "==", "active")
+          .get();
+          
+        if (!connectionsSnapshot.empty) {
+          const familyNotificationPromises = connectionsSnapshot.docs.map(async (doc) => {
+            const connectionData = doc.data();
+            const familyUserId = connectionData.familyId;
+            // Get family user's FCM token from correct subcollection path
+            const familyProfileDoc = await db.collection("users")
+              .doc(familyUserId)
+              .collection("data")
+              .doc("profile")
+              .get();
+              
+            const familyData = familyProfileDoc.data();
+            const familyFcmToken = familyData?.fcmToken;
+            
+            if (familyFcmToken) {
+              return admin.messaging().send({
+                token: familyFcmToken,
+                notification: {
+                  title: "Missed Check-in Alert",
+                  body: "Your senior has missed a scheduled check-in. Please check on them.",
+                },
+                data: {
+                  type: "family_missed_alert",
+                  seniorUserId: userId,
+                  missedCount: String(missedCount),
+                  click_action: "FLUTTER_NOTIFICATION_CLICK",
+                },
+                android: {
+                  priority: "high",
+                  notification: {
+                    channelId: "high_importance_channel",
+                    priority: "max",
+                    visibility: "public",
+                  },
+                },
+                apns: {
+                  payload: {
+                    aps: {
+                      sound: "default",
+                      "content-available": 1,
+                    },
+                  },
+                },
+              });
+            } else {
+               logger.warn(`No FCM token found for family user ${familyUserId}`);
+            }
+          });
+          
+          await Promise.allSettled(familyNotificationPromises);
+          logger.info(`Sent family notifications for user ${userId}`);
+        }
+        
       } catch (fcmError) {
         // Log but don't fail the request - FCM is best-effort
         logger.error(`FCM notification failed for user ${userId}:`, { error: fcmError.message });
@@ -967,7 +1090,16 @@ exports.onCheckInRecorded = onDocumentWritten({
       const seniorState = seniorStateDoc.data();
       
       const schedules = seniorState.checkInSchedules || ["11:00 AM"];
-      const nextExpected = calculateNextExpectedCheckIn(schedules, new Date(), checkInTime, userTimezone);
+      const completedToday = seniorState.completedSchedulesToday || [];
+      
+      // Pass completedSchedulesToday for multi check-in support
+      const nextExpected = calculateNextExpectedCheckIn(
+        schedules, 
+        new Date(), 
+        checkInTime, 
+        userTimezone,
+        completedToday
+      );
       
       // Reset consecutive missed days on successful check-in
       transaction.update(seniorStateRef, {
@@ -977,7 +1109,7 @@ exports.onCheckInRecorded = onDocumentWritten({
         activeTaskId: FieldValue.delete(), // Will be set by scheduleCheckInTask
       });
       
-      logger.info(`Updated nextExpectedCheckIn for ${userId}: ${nextExpected?.toISOString()}`);
+      logger.info(`Updated nextExpectedCheckIn for ${userId}: ${nextExpected?.toISOString()}, completedSchedules: ${completedToday.length}`);
     });
     
     // Schedule task for next check-in (outside transaction)
@@ -1015,7 +1147,12 @@ exports.resetDailyCounters = onRequest({
       const seniorStateRef = db.collection("users").doc(userId)
         .collection("data").doc("seniorState");
       
-      batch.update(seniorStateRef, { missedCheckInsToday: 0 });
+      // Reset missed check-ins AND completedSchedulesToday for new day
+      batch.update(seniorStateRef, { 
+        missedCheckInsToday: 0,
+        completedSchedulesToday: [],
+        lastScheduleResetDate: Timestamp.now(),
+      });
       batchCount++;
       resetCount++;
 
@@ -1038,5 +1175,152 @@ exports.resetDailyCounters = onRequest({
   } catch (error) {
     logger.error("Error in resetDailyCounters:", { error: error.message });
     res.status(500).send("Internal error");
+  }
+});
+
+/**
+ * SOS Alert Trigger
+ * Sends FCM push notification to all connected family members when senior triggers SOS
+ * Includes 5-minute cooldown to prevent duplicate notifications
+ */
+exports.onSOSTriggered = onDocumentWritten({
+  document: "users/{userId}/data/seniorState",
+  region: "us-central1",
+}, async (event) => {
+  const beforeData = event.data?.before?.data() || {};
+  const afterData = event.data?.after?.data() || {};
+  
+  // Only trigger when sosActive changes from false to true
+  const wasActive = beforeData.sosActive === true;
+  const isActive = afterData.sosActive === true;
+  
+  if (wasActive || !isActive) {
+    // SOS was not just triggered (either was already active, or is now inactive)
+    return;
+  }
+  
+  const userId = event.params.userId;
+  logger.info(`SOS triggered by user ${userId}`);
+  
+  // Check cooldown - don't send notification if one was sent within 5 minutes
+  const sosTriggeredAt = afterData.sosTriggeredAt?.toDate?.();
+  const prevTriggeredAt = beforeData.sosTriggeredAt?.toDate?.();
+  
+  if (sosTriggeredAt && prevTriggeredAt) {
+    const diffMs = sosTriggeredAt.getTime() - prevTriggeredAt.getTime();
+    const cooldownMs = 5 * 60 * 1000; // 5 minutes
+    
+    if (diffMs < cooldownMs) {
+      logger.info(`SOS cooldown active for user ${userId}, skipping notification`, {
+        diffMs,
+        cooldownMs
+      });
+      return;
+    }
+  }
+  
+  try {
+    // Get senior's display name
+    const profileDoc = await db.collection("users").doc(userId)
+      .collection("data").doc("profile").get();
+    
+    const seniorName = profileDoc.exists 
+      ? (profileDoc.data()?.displayName || "Your family member")
+      : "Your family member";
+    
+    // Find all family members connected to this senior
+    const connectionsSnapshot = await db.collection("connections")
+      .where("seniorId", "==", userId)
+      .where("status", "==", "active")
+      .get();
+    
+    if (connectionsSnapshot.empty) {
+      logger.info(`No active family connections for user ${userId}`);
+      return;
+    }
+    
+    // Collect family member IDs
+    const familyIds = connectionsSnapshot.docs.map(doc => doc.data().familyId);
+    logger.info(`Found ${familyIds.length} family members to notify`);
+    
+    // Get FCM tokens for all family members
+    const tokens = [];
+    for (const familyId of familyIds) {
+      try {
+        const familyProfileDoc = await db.collection("users").doc(familyId)
+          .collection("data").doc("profile").get();
+        
+        if (familyProfileDoc.exists) {
+          const fcmToken = familyProfileDoc.data()?.fcmToken;
+          if (fcmToken) {
+            tokens.push(fcmToken);
+          }
+        }
+      } catch (error) {
+        logger.warn(`Error fetching FCM token for family ${familyId}:`, { error: error.message });
+      }
+    }
+    
+    if (tokens.length === 0) {
+      logger.info(`No FCM tokens found for family members of user ${userId}`);
+      return;
+    }
+    
+    // Send FCM notification to all family members
+    const message = {
+      tokens,
+      notification: {
+        title: "🚨 SOS Alert!",
+        body: `${seniorName} needs help! Tap to respond.`,
+      },
+      data: {
+        type: "sos_alert",
+        seniorId: userId,
+        seniorName,
+        source: "server",
+        timestamp: new Date().toISOString(),
+      },
+      android: {
+        priority: "high",
+        notification: {
+          channelId: "sos_alerts",
+          priority: "max",
+          sound: "default",
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            sound: "default",
+            badge: 1,
+            alert: {
+              title: "🚨 SOS Alert!",
+              body: `${seniorName} needs help! Tap to respond.`,
+            },
+          },
+        },
+        headers: {
+          "apns-priority": "10",
+        },
+      },
+    };
+    
+    const response = await getMessaging().sendEachForMulticast(message);
+    logger.info(`SOS FCM sent for user ${userId}`, {
+      successCount: response.successCount,
+      failureCount: response.failureCount,
+    });
+    
+    // Handle any failures
+    if (response.failureCount > 0) {
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          logger.warn(`FCM send failed for token ${idx}:`, { error: resp.error?.message });
+        }
+      });
+    }
+    
+  } catch (error) {
+    logger.error(`Error handling SOS for user ${userId}:`, { error: error.message });
   }
 });

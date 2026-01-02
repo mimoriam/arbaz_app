@@ -2,6 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:arbaz_app/screens/navbar/cognitive_games/speed_tap.dart';
 import 'package:arbaz_app/screens/navbar/cognitive_games/memory_match.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/sequence_follow.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/simple_sums.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/word_jumble.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/odd_one_out.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/pattern_complete.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/spot_the_difference.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/picture_recall.dart';
+import 'package:arbaz_app/screens/navbar/cognitive_games/word_categories.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 /// Model for a cognitive game
@@ -152,6 +160,30 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
         break;
       case 'Memory Match':
         gameScreen = const MemoryMatchScreen();
+        break;
+      case 'Sequence Follow':
+        gameScreen = const SequenceFollowScreen();
+        break;
+      case 'Simple Sums':
+        gameScreen = const SimpleSumsScreen();
+        break;
+      case 'Word Jumble':
+        gameScreen = const WordJumbleScreen();
+        break;
+      case 'Odd One Out':
+        gameScreen = const OddOneOutScreen();
+        break;
+      case 'Pattern Complete':
+        gameScreen = const PatternCompleteScreen();
+        break;
+      case 'Spot the Difference':
+        gameScreen = const SpotTheDifferenceScreen();
+        break;
+      case 'Picture Recall':
+        gameScreen = const PictureRecallScreen();
+        break;
+      case 'Word Categories':
+        gameScreen = const WordCategoriesScreen();
         break;
       default:
         // Show coming soon for other games
@@ -364,18 +396,18 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
                           : AppColors.textPrimary,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'LEVEL ${game.level} • ${game.category}',
-                    style: GoogleFonts.inter(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: isDarkMode
-                          ? AppColors.textSecondaryDark
-                          : AppColors.textSecondary,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
+                  // const SizedBox(height: 4),
+                  // Text(
+                  //   'LEVEL ${game.level} • ${game.category}',
+                  //   style: GoogleFonts.inter(
+                  //     fontSize: 11,
+                  //     fontWeight: FontWeight.w600,
+                  //     color: isDarkMode
+                  //         ? AppColors.textSecondaryDark
+                  //         : AppColors.textSecondary,
+                  //     letterSpacing: 0.5,
+                  //   ),
+                  // ),
                 ],
               ),
             ),

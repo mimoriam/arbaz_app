@@ -593,6 +593,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Spacer(),
           GestureDetector(
             onTap: () async {
+              if (provider.schedules.length <= 1) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'You must have at least one check-in schedule.',
+                      style: GoogleFonts.inter(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                    backgroundColor: AppColors.warningOrange,
+                    behavior: SnackBarBehavior.floating,
+                    margin: const EdgeInsets.all(20),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                );
+                return;
+              }
+
               final confirmed = await showDialog<bool>(
                 context: context,
                 builder: (context) => AlertDialog(
@@ -2369,6 +2390,7 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
               const SizedBox(height: 8),
               DropdownButtonFormField<String>(
                 // initialValue: _relationship,
+                // ignore: deprecated_member_use
                 value: _relationship,
                 decoration: InputDecoration(
                   border: OutlineInputBorder(

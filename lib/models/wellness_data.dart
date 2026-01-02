@@ -92,6 +92,7 @@ class SeniorStatusData {
   final DateTime? lastCheckIn;
   final String? timeString; // Formatted time string, e.g. "22:13"
   final bool vacationMode;
+  final bool sosActive; // True when SOS alert is active
 
   SeniorStatusData({
     required this.status,
@@ -99,6 +100,7 @@ class SeniorStatusData {
     this.lastCheckIn,
     this.timeString,
     this.vacationMode = false,
+    this.sosActive = false,
   });
 }
 

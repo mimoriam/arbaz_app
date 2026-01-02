@@ -69,6 +69,129 @@ class GameResult {
     return ((accuracyScore * 0.6) + (responseScore * 0.4)).round();
   }
 
+  /// Calculate normalized score (0-100) from SequenceFollow metrics
+  static int calculateSequenceFollowScore({
+    required int maxSequenceLength,
+    required int roundsCompleted,
+    required int sequenceErrors,
+    required int difficultyLevel,
+  }) {
+    // Max sequence weighted 60%, rounds 30%, errors -10% each
+    // Adjust max length expectation based on difficulty
+    final expectedMaxLength = difficultyLevel + 3; // e.g., Level 1 -> 4, Level 5 -> 8
+    
+    final sequenceScore = (maxSequenceLength / expectedMaxLength * 100).clamp(0.0, 100.0);
+    final roundScore = (roundsCompleted / 5 * 100).clamp(0.0, 100.0);
+    final errorPenalty = (sequenceErrors * 10).clamp(0, 50);
+    
+    return ((sequenceScore * 0.6) + (roundScore * 0.3) - errorPenalty).round().clamp(0, 100);
+  }
+
+  /// Calculate normalized score (0-100) from SimpleSums metrics
+  static int calculateSimpleSumsScore({
+    required double accuracy,
+    required int averageResponseTimeMs,
+  }) {
+    // Accuracy 70%, speed 30%
+    // Speed expectation: 5000ms is slow (0 pts), 1000ms is fast (100 pts)
+    final speedScore = ((5000 - averageResponseTimeMs) / 40).clamp(0, 100).toDouble();
+    
+    return ((accuracy * 0.7) + (speedScore * 0.3)).round().clamp(0, 100);
+  }
+
+  /// Calculate normalized score (0-100) from WordJumble metrics
+  static int calculateWordJumbleScore({
+    required double successRate,
+    required int averageSolveTimeMs,
+    required int hintsUsed,
+  }) {
+    // Solved % 60%, speed 25%, hint penalty 15%
+    // Speed expectation: 30s is slow (0 pts), 5s is fast (100 pts)
+    final speedScore = ((30000 - averageSolveTimeMs) / 250).clamp(0, 100).toDouble();
+    final hintPenalty = (hintsUsed * 10).clamp(0, 30);
+    
+    return ((successRate * 0.6) + (speedScore * 0.25) - hintPenalty).round().clamp(0, 100);
+  }
+
+  /// Calculate normalized score (0-100) from OddOneOut metrics
+  static int calculateOddOneOutScore({
+    required double accuracy,
+    required int averageResponseTimeMs,
+  }) {
+    // Accuracy 70%, Speed 30%
+    // Speed expectation: 5000ms is slow (0 pts), 1000ms is fast (100 pts)
+    final speedScore = ((5000 - averageResponseTimeMs) / 40).clamp(0, 100).toDouble();
+    
+    return ((accuracy * 0.7) + (speedScore * 0.3)).round().clamp(0, 100);
+  }
+
+  /// Calculate normalized score (0-100) from PatternComplete metrics
+  static int calculatePatternCompleteScore({
+    required double accuracy,
+    required int averageResponseTimeMs,
+  }) {
+    // Accuracy 70%, Speed 30%
+    // Speed expectation: 8000ms is slow (0 pts), 2000ms is fast (100 pts)
+    final speedScore = ((8000 - averageResponseTimeMs) / 60).clamp(0, 100).toDouble();
+    
+    return ((accuracy * 0.7) + (speedScore * 0.3)).round().clamp(0, 100);
+  }
+
+  /// Calculate normalized score (0-100) from SpotTheDifference metrics
+  static int calculateSpotTheDifferenceScore({
+    required int foundedDifferences,
+    required int totalDifferences,
+    required int hintsUsed,
+    required int incorrectTaps,
+  }) {
+    // Early validation to prevent division by zero
+    if (totalDifferences <= 0) {
+      return 0;
+    }
+    
+    // Clamp inputs to valid ranges
+    final clampedFound = foundedDifferences.clamp(0, totalDifferences);
+    final clampedHints = hintsUsed < 0 ? 0 : hintsUsed;
+    final clampedTaps = incorrectTaps < 0 ? 0 : incorrectTaps;
+    
+    // Base score on percentage found
+    double score = (clampedFound / totalDifferences) * 100;
+    
+    // Penalties
+    final hintPenalty = clampedHints * 5;
+    final tapPenalty = clampedTaps * 2;
+    
+    score = score - hintPenalty - tapPenalty;
+    return score.round().clamp(0, 100);
+  }
+
+  /// Calculate normalized score (0-100) from PictureRecall metrics
+  static int calculatePictureRecallScore({
+    required int questionsCorrect,
+    required int totalQuestions,
+    required int averageResponseTimeMs,
+  }) {
+    // Early validation to prevent division by zero
+    if (totalQuestions <= 0) {
+      return 0;
+    }
+    
+    // Accuracy 80%, Speed 20%
+    final accuracy = (questionsCorrect / totalQuestions) * 100;
+    final speedScore = ((8000 - averageResponseTimeMs) / 80).clamp(0, 100).toDouble();
+    return ((accuracy * 0.8) + (speedScore * 0.2)).round().clamp(0, 100);
+  }
+
+  /// Calculate normalized score (0-100) from WordCategories metrics
+  static int calculateWordCategoriesScore({
+    required double accuracy,
+    required int averageResponseTimeMs,
+  }) {
+    // Accuracy 70%, Speed 30%
+    final speedScore = ((5000 - averageResponseTimeMs) / 50).clamp(0, 100).toDouble();
+    return ((accuracy * 0.7) + (speedScore * 0.3)).round().clamp(0, 100);
+  }
+
   /// Creates a copy with updated values
   GameResult copyWith({
     String? id,
@@ -91,6 +214,8 @@ class GameResult {
 class CognitiveMetrics {
   final double memoryRecall; // 0.0 - 1.0
   final double reactionSpeed; // 0.0 - 1.0
+  final double problemSolving; // 0.0 - 1.0
+  final double verbalSkills; // 0.0 - 1.0
   final double overallScore; // 0.0 - 1.0
   final String trend; // 'improving', 'stable', 'declining'
   final int gamesPlayed;
@@ -98,6 +223,8 @@ class CognitiveMetrics {
   CognitiveMetrics({
     required this.memoryRecall,
     required this.reactionSpeed,
+    required this.problemSolving,
+    required this.verbalSkills,
     required this.overallScore,
     required this.trend,
     required this.gamesPlayed,
@@ -109,6 +236,8 @@ class CognitiveMetrics {
       return CognitiveMetrics(
         memoryRecall: 0,
         reactionSpeed: 0,
+        problemSolving: 0,
+        verbalSkills: 0,
         overallScore: 0,
         trend: 'stable',
         gamesPlayed: 0,
@@ -116,21 +245,21 @@ class CognitiveMetrics {
     }
 
     // Separate by game type
-    final memoryResults = results.where((r) => r.gameType == 'memory_match').toList();
-    final speedResults = results.where((r) => r.gameType == 'speed_tap').toList();
+    final memoryResults = results.where((r) => r.gameType == 'memory_match' || r.gameType == 'sequence_follow' || r.gameType == 'picture_recall').toList();
+    final speedResults = results.where((r) => r.gameType == 'speed_tap' || r.gameType == 'spot_the_difference').toList();
+    final problemSolvingResults = results.where((r) => r.gameType == 'simple_sums' || r.gameType == 'pattern_complete' || r.gameType == 'odd_one_out' || r.gameType == 'word_categories').toList();
+    final verbalResults = results.where((r) => r.gameType == 'word_jumble').toList();
 
     // Calculate averages
-    double memoryRecall = 0;
-    if (memoryResults.isNotEmpty) {
-      memoryRecall = memoryResults.map((r) => r.score).reduce((a, b) => a + b) / 
-          memoryResults.length / 100;
+    double calculateAvg(List<GameResult> list) {
+      if (list.isEmpty) return 0;
+      return list.map((r) => r.score).reduce((a, b) => a + b) / list.length / 100;
     }
 
-    double reactionSpeed = 0;
-    if (speedResults.isNotEmpty) {
-      reactionSpeed = speedResults.map((r) => r.score).reduce((a, b) => a + b) / 
-          speedResults.length / 100;
-    }
+    final memoryRecall = calculateAvg(memoryResults);
+    final reactionSpeed = calculateAvg(speedResults);
+    final problemSolving = calculateAvg(problemSolvingResults);
+    final verbalSkills = calculateAvg(verbalResults);
 
     // Overall score
     final allScores = results.map((r) => r.score).toList();
@@ -154,6 +283,8 @@ class CognitiveMetrics {
     return CognitiveMetrics(
       memoryRecall: memoryRecall.clamp(0, 1),
       reactionSpeed: reactionSpeed.clamp(0, 1),
+      problemSolving: problemSolving.clamp(0, 1),
+      verbalSkills: verbalSkills.clamp(0, 1),
       overallScore: overallScore.clamp(0, 1),
       trend: trend,
       gamesPlayed: results.length,

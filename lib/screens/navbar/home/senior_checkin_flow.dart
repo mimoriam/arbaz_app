@@ -1044,40 +1044,40 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
                       : AppColors.textSecondary,
                 ),
               ),
-              if (widget.currentStreak > 0) ...[
-                const SizedBox(height: 40),
-                // Streak Badge
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEA580C).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.local_fire_department_rounded,
-                        color: Color(0xFFEA580C),
-                        size: 24,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        "${widget.currentStreak} day streak",
-                        style: GoogleFonts.inter(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: const Color(0xFFEA580C),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              const SizedBox(height: 48),
+              // if (widget.currentStreak > 0) ...[
+              //   const SizedBox(height: 40),
+              //   // Streak Badge
+              //   Container(
+              //     padding: const EdgeInsets.symmetric(
+              //       horizontal: 20,
+              //       vertical: 10,
+              //     ),
+              //     decoration: BoxDecoration(
+              //       color: const Color(0xFFEA580C).withValues(alpha: 0.1),
+              //       borderRadius: BorderRadius.circular(30),
+              //     ),
+              //     child: Row(
+              //       mainAxisSize: MainAxisSize.min,
+              //       children: [
+              //         const Icon(
+              //           Icons.local_fire_department_rounded,
+              //           color: Color(0xFFEA580C),
+              //           size: 24,
+              //         ),
+              //         const SizedBox(width: 8),
+              //         Text(
+              //           "${widget.currentStreak} day streak",
+              //           style: GoogleFonts.inter(
+              //             fontSize: 20,
+              //             fontWeight: FontWeight.w700,
+              //             color: const Color(0xFFEA580C),
+              //           ),
+              //         ),
+              //       ],
+              //     ),
+              //   ),
+              // ],
+              const SizedBox(height: 16),
 
               // Voice Note Card
               Container(

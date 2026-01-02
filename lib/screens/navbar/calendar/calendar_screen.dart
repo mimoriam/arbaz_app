@@ -1048,7 +1048,7 @@ class _CalendarScreenState extends State<CalendarScreen>
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: sortedRecords.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  separatorBuilder: (_, _) => const SizedBox(height: 10),
                   itemBuilder: (context, index) {
                     final record = sortedRecords[index];
                     return _buildCheckInCard(record, index + 1, isDarkMode);
@@ -1112,15 +1112,30 @@ class _CalendarScreenState extends State<CalendarScreen>
                     : AppColors.textSecondary,
               ),
               const SizedBox(width: 4),
-              Text(
-                DateFormat('h:mm a').format(record.timestamp),
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: isDarkMode
-                      ? AppColors.textPrimaryDark
-                      : AppColors.textPrimary,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    DateFormat('h:mm a').format(record.timestamp),
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: isDarkMode
+                          ? AppColors.textPrimaryDark
+                          : AppColors.textPrimary,
+                    ),
+                  ),
+                  // Show which schedules were satisfied
+                  if (record.scheduledFor.isNotEmpty)
+                    Text(
+                      '✓ ${record.scheduledFor.join(', ')}',
+                      style: GoogleFonts.inter(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.successGreen,
+                      ),
+                    ),
+                ],
               ),
               const Spacer(),
               // Mood if available

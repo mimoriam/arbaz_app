@@ -90,11 +90,25 @@ class FcmService {
       }
       
       // Listen for token refresh - registered only once, uses _userId instance variable
+      // Added error handling to prevent silent token update failures
       _messaging.onTokenRefresh.listen((newToken) async {
         debugPrint('FCM Token refreshed: $newToken');
         _currentToken = newToken;
         if (_userId != null) {
-          await _updateTokenInFirestore(_userId!, newToken);
+          try {
+            await _updateTokenInFirestore(_userId!, newToken);
+          } catch (e) {
+            debugPrint('FCM: Failed to update refreshed token: $e');
+            // Retry once after delay - if this fails, next app launch will fix it
+            Future.delayed(const Duration(seconds: 5), () async {
+              try {
+                await _updateTokenInFirestore(_userId!, newToken);
+                debugPrint('FCM: Token update retry succeeded');
+              } catch (retryError) {
+                debugPrint('FCM: Token update retry also failed: $retryError');
+              }
+            });
+          }
         }
       });
       
@@ -187,8 +201,34 @@ class FcmService {
       
       // Record FCM notification time for deduplication
       await _recordFcmNotificationTime();
+    } else if (type == 'family_missed_alert') {
+      final int missedCount = int.tryParse(message.data['missedCount'] ?? '1') ?? 1;
+      final String seniorId = message.data['seniorUserId'] ?? '';
+      
+      if (seniorId.isNotEmpty) {
+        await NotificationService().showFamilyMissedCheckInNotification(
+          missedCount: missedCount,
+          seniorId: seniorId,
+        );
+         // Record FCM notification time for deduplication
+        await _recordFcmNotificationTime();
+      }
+    } else if (type == 'sos_alert') {
+      // Handle SOS alert for family members
+      final String seniorId = message.data['seniorId'] ?? '';
+      final String seniorName = message.data['seniorName'] ?? 'Your family member';
+      
+      if (seniorId.isNotEmpty) {
+        await NotificationService().showFamilySOSNotification(
+          seniorId: seniorId,
+          seniorName: seniorName,
+        );
+        // Record FCM notification time for deduplication
+        await _recordFcmNotificationTime();
+      }
     }
   }
+
   
   /// Handles notification tap from terminated or background state.
   void _handleNotificationTap(RemoteMessage message) {

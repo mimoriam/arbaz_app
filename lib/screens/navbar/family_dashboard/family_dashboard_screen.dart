@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/models/activity_log.dart';
+import 'package:arbaz_app/models/user_model.dart';
 import 'package:intl/intl.dart';
 
 /// Model for family member display in dashboard
@@ -57,14 +58,20 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
   int _selectedTab = 0; // 0: Overview, 1: Activity, 2: Alerts
 
   // Real data state
-  List<FamilyMemberData> _familyMembers = [];
+  final List<FamilyMemberData> _familyMembers = [];
   List<ActivityLog> _recentActivity = [];
   List<ActivityLog> _alerts = [];
   bool _isLoading = true;
   String? _errorMessage;
   
-  // Stream subscriptions
+  // Stream subscriptions for real-time updates
   StreamSubscription? _connectionsSubscription;
+  final Map<String, StreamSubscription<SeniorState?>> _seniorStateSubscriptions = {};
+  
+  // Cached data for building FamilyMemberData when streams update
+  final Map<String, UserProfile?> _cachedProfiles = {};
+  final Map<String, dynamic> _cachedConnections = {}; // seniorId -> connection
+
 
   @override
   void initState() {
@@ -85,6 +92,11 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
   @override
   void dispose() {
     _connectionsSubscription?.cancel();
+    // Cancel all senior state subscriptions
+    for (final sub in _seniorStateSubscriptions.values) {
+      sub.cancel();
+    }
+    _seniorStateSubscriptions.clear();
     _animationController.dispose();
     super.dispose();
   }
@@ -110,7 +122,15 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
     try {
       final firestoreService = context.read<FirestoreService>();
       
-      // Get connections where current user is family member
+      // Cancel existing senior state subscriptions before reloading
+      for (final sub in _seniorStateSubscriptions.values) {
+        sub.cancel();
+      }
+      _seniorStateSubscriptions.clear();
+      _cachedProfiles.clear();
+      _cachedConnections.clear();
+      
+      // Get connections where current user is family member (one-time fetch)
       List<dynamic> connections;
       try {
         connections = await firestoreService
@@ -122,9 +142,9 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
         connections = [];
       }
 
-      List<FamilyMemberData> members = [];
       List<String> seniorIds = [];
 
+      // Load static data (profiles, roles) and set up streams for dynamic data
       for (final conn in connections) {
         // Check if senior has confirmed their role
         final seniorRoles = await firestoreService
@@ -140,7 +160,7 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
 
         seniorIds.add(conn.seniorId);
         
-        // Get senior profile
+        // Get senior profile (static - doesn't change often)
         final profile = await firestoreService
             .getUserProfile(conn.seniorId)
             .catchError((e, stack) {
@@ -148,69 +168,15 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
           return null;
         });
         
-        // Get senior state for check-in status and vacation mode
-        final seniorState = await firestoreService
-            .getSeniorState(conn.seniorId)
-            .catchError((e, stack) {
-          debugPrint('Failed to getSeniorState for seniorId: ${conn.seniorId}: $e');
-          return null;
-        });
+        // Cache profile and connection for later use in stream updates
+        _cachedProfiles[conn.seniorId] = profile;
+        _cachedConnections[conn.seniorId] = conn;
         
-        // Calculate status
-        String status = 'pending';
-        if (seniorState != null) {
-          if (seniorState.vacationMode) {
-            status = 'safe'; // Vacation mode counts as safe
-          } else if (seniorState.lastCheckIn != null) {
-            final now = DateTime.now();
-            final lastCheckIn = seniorState.lastCheckIn!;
-            final isSameDay = lastCheckIn.year == now.year &&
-                lastCheckIn.month == now.month &&
-                lastCheckIn.day == now.day;
-            status = isSameDay ? 'safe' : 'pending';
-            
-            // Check for missed check-ins (has schedules passed today with no check-in)
-            // Day 1 logic: skip ONLY for default 11:00 AM schedule
-            // If user adds custom schedules on Day 1, those SHOULD work normally
-            final isDay1 = seniorState.seniorCreatedAt != null &&
-                seniorState.seniorCreatedAt!.year == now.year &&
-                seniorState.seniorCreatedAt!.month == now.month &&
-                seniorState.seniorCreatedAt!.day == now.day;
-            
-            // Check if using only the default schedule
-            final hasOnlyDefaultSchedule = seniorState.checkInSchedules.length == 1 &&
-                seniorState.checkInSchedules.first.trim().toUpperCase() == '11:00 AM';
-            
-            // Only skip on Day 1 if using only the default schedule
-            final skipDay1Default = isDay1 && hasOnlyDefaultSchedule;
-            
-            if (!isSameDay && seniorState.checkInSchedules.isNotEmpty && !skipDay1Default) {
-              for (final schedule in seniorState.checkInSchedules) {
-                final scheduledTime = _parseScheduleTime(schedule, now);
-                if (scheduledTime != null && now.isAfter(scheduledTime)) {
-                  status = 'alert';
-                  break;
-                }
-              }
-            }
-          }
-        }
-
-        members.add(FamilyMemberData(
-          id: conn.seniorId,
-          name: profile?.displayName ?? 
-                conn.seniorName ??
-                profile?.email.split('@').first ?? 
-                'Senior',
-          relationship: conn.relationshipType ?? 'Family',
-          status: status,
-          location: profile?.locationAddress,
-          lastCheckIn: seniorState?.lastCheckIn,
-          isVacationMode: seniorState?.vacationMode ?? false,
-        ));
+        // Subscribe to real-time senior state updates
+        _subscribeSeniorState(conn.seniorId, firestoreService);
       }
 
-      // Load activities for all connected seniors
+      // Load activities for all connected seniors (one-time, can pull-to-refresh)
       List<ActivityLog> activities = [];
       List<ActivityLog> alerts = [];
       
@@ -227,7 +193,6 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
 
       if (mounted) {
         setState(() {
-          _familyMembers = members;
           _recentActivity = activities;
           _alerts = alerts;
           _isLoading = false;
@@ -242,6 +207,94 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
         });
       }
     }
+  }
+  
+  /// Subscribe to real-time senior state updates for a specific senior
+  void _subscribeSeniorState(String seniorId, FirestoreService firestoreService) {
+    // Cancel existing subscription if any
+    _seniorStateSubscriptions[seniorId]?.cancel();
+    
+    _seniorStateSubscriptions[seniorId] = firestoreService
+        .streamSeniorState(seniorId)
+        .listen(
+      (seniorState) {
+        if (!mounted) return;
+        _updateFamilyMemberFromState(seniorId, seniorState);
+      },
+      onError: (error) {
+        debugPrint('Error streaming senior state for $seniorId: $error');
+      },
+    );
+  }
+  
+  /// Update or create a FamilyMemberData entry based on real-time senior state
+  void _updateFamilyMemberFromState(String seniorId, SeniorState? seniorState) {
+    final profile = _cachedProfiles[seniorId];
+    final conn = _cachedConnections[seniorId];
+    
+    if (conn == null) return; // No connection data cached
+    
+    // Calculate status
+    String status = 'pending';
+    if (seniorState != null) {
+      if (seniorState.vacationMode) {
+        status = 'safe'; // Vacation mode counts as safe
+      } else if (seniorState.lastCheckIn != null) {
+        final now = DateTime.now();
+        final lastCheckIn = seniorState.lastCheckIn!;
+        final isSameDay = lastCheckIn.year == now.year &&
+            lastCheckIn.month == now.month &&
+            lastCheckIn.day == now.day;
+        status = isSameDay ? 'safe' : 'pending';
+        
+        // Check for missed check-ins (has schedules passed today with no check-in)
+        // Day 1 logic: skip ONLY for default 11:00 AM schedule
+        final isDay1 = seniorState.seniorCreatedAt != null &&
+            seniorState.seniorCreatedAt!.year == now.year &&
+            seniorState.seniorCreatedAt!.month == now.month &&
+            seniorState.seniorCreatedAt!.day == now.day;
+        
+        // Check if using only the default schedule
+        final hasOnlyDefaultSchedule = seniorState.checkInSchedules.length == 1 &&
+            seniorState.checkInSchedules.first.trim().toUpperCase() == '11:00 AM';
+        
+        // Only skip on Day 1 if using only the default schedule
+        final skipDay1Default = isDay1 && hasOnlyDefaultSchedule;
+        
+        if (!isSameDay && seniorState.checkInSchedules.isNotEmpty && !skipDay1Default) {
+          for (final schedule in seniorState.checkInSchedules) {
+            final scheduledTime = _parseScheduleTime(schedule, now);
+            if (scheduledTime != null && now.isAfter(scheduledTime)) {
+              status = 'alert';
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    final updatedMember = FamilyMemberData(
+      id: seniorId,
+      name: profile?.displayName ?? 
+            conn.seniorName ??
+            profile?.email.split('@').first ?? 
+            'Senior',
+      relationship: conn.relationshipType ?? 'Family',
+      status: status,
+      location: profile?.locationAddress,
+      lastCheckIn: seniorState?.lastCheckIn,
+      isVacationMode: seniorState?.vacationMode ?? false,
+    );
+
+    setState(() {
+      // Find and update existing member, or add new one
+      final existingIndex = _familyMembers.indexWhere((m) => m.id == seniorId);
+      if (existingIndex >= 0) {
+        _familyMembers[existingIndex] = updatedMember;
+      } else {
+        _familyMembers.add(updatedMember);
+      }
+    });
   }
 
   /// Parse schedule time (e.g., "11:00 AM") to DateTime for today

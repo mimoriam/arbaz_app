@@ -304,12 +304,12 @@ class _MemoryMatchScreenState extends State<MemoryMatchScreen>
     }
   }
 
-  void _endGame() {
+  Future<void> _endGame() async {
     _gameTimer?.cancel();
     setState(() {
       _gameEnded = true;
     });
-    _saveGameResult();
+    await _saveGameResult();
   }
 
   /// Saves the game result to Firestore for cognitive index tracking
@@ -391,6 +391,7 @@ class _MemoryMatchScreenState extends State<MemoryMatchScreen>
       _correctMatches = 0;
       _incorrectAttempts = 0;
       _matchTimes = [];
+      _resultsSaved = false; // Reset so new session can save results
     });
 
     _fadeController.reset();
@@ -398,13 +399,28 @@ class _MemoryMatchScreenState extends State<MemoryMatchScreen>
     _startCountdown();
   }
 
+  /// Flag to prevent double-saving (once in dispose, once in endGame)
+  bool _resultsSaved = false;
+
   @override
   void dispose() {
     _gameTimer?.cancel();
     _countdownTimer?.cancel();
+    // Note: We save proactively via _handleExit() instead of calling async methods here
+    // since context and mounted are not valid during dispose.
     _fadeController.dispose();
     _disposeCardAnimations();
     super.dispose();
+  }
+
+  /// Handles exit by saving game results proactively before popping.
+  Future<void> _handleExit() async {
+    if (_gameStarted && !_gameEnded && !_resultsSaved && _moves > 0) {
+      await _saveGameResult();
+    }
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -862,7 +878,7 @@ class _MemoryMatchScreenState extends State<MemoryMatchScreen>
     return Padding(
       padding: const EdgeInsets.all(20),
       child: GestureDetector(
-        onTap: () => Navigator.pop(context),
+        onTap: _handleExit,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           decoration: BoxDecoration(

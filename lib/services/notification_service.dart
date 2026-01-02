@@ -48,6 +48,8 @@ class NotificationService {
   
   /// Cooldown period to prevent duplicate notifications (Timer + Firestore stream race)
   static const Duration _notificationCooldown = Duration(seconds: 30);
+  /// SOS-specific cooldown period (5 minutes) to prevent repeated SOS alerts
+  static const Duration _sosCooldown = Duration(minutes: 5);
   static const String _cooldownPrefKey = 'notification_last_shown_timestamp';
   DateTime? _lastNotificationTime;
   
@@ -156,7 +158,7 @@ class NotificationService {
       final timestamp = prefs.getInt(_cooldownPrefKey);
       if (timestamp != null) {
         _lastNotificationTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
-        debugPrint('NotificationService: Loaded cooldown timestamp from ${_lastNotificationTime}');
+        debugPrint('NotificationService: Loaded cooldown timestamp from $_lastNotificationTime');
       }
     } catch (e) {
       debugPrint('Error loading cooldown timestamp: $e');
@@ -378,5 +380,195 @@ class NotificationService {
     } catch (e) {
       debugPrint('Error cancelling all notifications: $e');
     }
+  }
+
+  /// Checks if a generic cooldown is active for the given key (uses 30 second cooldown)
+  Future<bool> _isInCooldown(String key) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final timestamp = prefs.getInt(key);
+      if (timestamp != null) {
+         final lastTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+         final timeSince = DateTime.now().difference(lastTime);
+         return timeSince < _notificationCooldown;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Checks if a SOS-specific cooldown is active for the given key (uses 5 minute cooldown)
+  Future<bool> _isInSosCooldown(String key) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final timestamp = prefs.getInt(key);
+      if (timestamp != null) {
+         final lastTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+         final timeSince = DateTime.now().difference(lastTime);
+         return timeSince < _sosCooldown;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Sets the cooldown timestamp for a specific key
+  Future<void> _setCooldown(String key) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(key, DateTime.now().millisecondsSinceEpoch);
+    } catch (e) {
+      debugPrint('Error saving cooldown: $e');
+    }
+  }
+  /// Shows a notification for a family member about a senior's missed check-in.
+  /// 
+  /// Includes:
+  /// - Validation for missedCount
+  /// - Cooldown logic to prevent spam
+  /// - Safe notification ID generation
+  /// - Critical alert fallback if entitlement missing (implicit by OS)
+  Future<void> showFamilyMissedCheckInNotification({
+    required int missedCount,
+    required String seniorId,
+  }) async {
+    if (!_isInitialized) return;
+    
+    // Validate missedCount
+    if (missedCount < 1) {
+      debugPrint('NotificationService: Invalid missedCount $missedCount for family alert');
+      return;
+    }
+    
+    // Check if notifications are enabled
+    final bool enabled = await areNotificationsEnabled();
+    if (!enabled) return;
+    
+    // Cooldown check for family notifications (per senior)
+    final String cooldownKey = 'last_family_alert_$seniorId';
+    if (await _isInCooldown(cooldownKey)) {
+      debugPrint('NotificationService: Skipping family alert for $seniorId - cooldown active');
+      return;
+    }
+    
+    // Build notification content - customize message for family
+    final String title = "Missed Check-in Alert";
+    final String body = missedCount == 1
+        ? "Your linked senior has missed a check-in. Please ensure they are okay."
+        : "Your linked senior has missed $missedCount check-ins. Please check on them immediately.";
+    
+    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      _channelId,
+      _channelName,
+      channelDescription: _channelDescription,
+      importance: Importance.high,
+      priority: Priority.high,
+      category: AndroidNotificationCategory.reminder,
+    );
+    
+    // Critical alerts require 'com.apple.developer.usernotifications.critical-alerts' entitlement.
+    // Without it, the interruptionLevel is treated as active/timeSensitive depending on OS version.
+    // We use critical here but OS will fallback if entitlement is missing.
+    const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentSound: true,
+      interruptionLevel: InterruptionLevel.critical, 
+    );
+    
+    const NotificationDetails notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+    
+    // Use full safe hash for notification ID to prevent collisions across seniors.
+    // The bitmask 0x7fffffff ensures a non-negative 31-bit integer, which is valid
+    // for notification IDs on both Android and iOS.
+    final int notificationId = seniorId.hashCode & 0x7fffffff;
+    
+    await _plugin.show(
+      notificationId,
+      title,
+      body,
+      notificationDetails,
+      payload: 'family_missed_checkin:$seniorId',
+    );
+    
+    // Set cooldown timestamp
+    await _setCooldown(cooldownKey);
+    
+    debugPrint('NotificationService: Showed family alert for senior $seniorId (ID: $notificationId)');
+  }
+
+  /// Shows a notification for a family member when a senior triggers SOS.
+  /// 
+  /// Includes:
+  /// - High-priority notification settings for immediate visibility
+  /// - Cooldown logic to prevent duplicate SOS alerts per senior
+  /// - Distinct notification ID per senior to allow multiple concurrent alerts
+  Future<void> showFamilySOSNotification({
+    required String seniorId,
+    required String seniorName,
+  }) async {
+    if (!_isInitialized) return;
+    
+    // Check if notifications are enabled
+    final bool enabled = await areNotificationsEnabled();
+    if (!enabled) return;
+    
+    // Cooldown check for SOS notifications (per senior) - 5 minutes
+    final String cooldownKey = 'last_family_sos_$seniorId';
+    if (await _isInSosCooldown(cooldownKey)) {
+      debugPrint('NotificationService: Skipping family SOS for $seniorId - 5 minute cooldown active');
+      return;
+    }
+    
+    // Build notification content
+    const String title = '🚨 SOS Alert!';
+    final String body = '$seniorName needs help! Tap to respond.';
+    
+    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      _channelId,
+      _channelName,
+      channelDescription: _channelDescription,
+      importance: Importance.max,
+      priority: Priority.max,
+      category: AndroidNotificationCategory.alarm,
+      fullScreenIntent: true, // Show as full-screen on lock screen
+      playSound: true,
+      enableVibration: true,
+    );
+    
+    // Critical alerts for iOS
+    const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentSound: true,
+      presentBadge: true,
+      interruptionLevel: InterruptionLevel.critical,
+    );
+    
+    const NotificationDetails notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
+    
+    // Use distinct notification ID for SOS (offset to avoid collision with missed check-in IDs)
+    // Bound the base hash to ensure final ID stays within 32-bit signed int range (max 0x7fffffff)
+    final int baseHash = (seniorId.hashCode & 0x7fffffff) % (0x7fffffff - 1000000);
+    final int notificationId = baseHash + 1000000;
+    
+    await _plugin.show(
+      notificationId,
+      title,
+      body,
+      notificationDetails,
+      payload: 'family_sos:$seniorId',
+    );
+    
+    // Set cooldown timestamp (5 minute cooldown for SOS)
+    await _setCooldown(cooldownKey);
+    
+    debugPrint('NotificationService: Showed family SOS alert for senior $seniorId (ID: $notificationId)');
   }
 }

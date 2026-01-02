@@ -178,9 +178,9 @@ class _SpeedTapScreenState extends State<SpeedTapScreen>
     });
   }
 
-  void _startNewRound() {
+  Future<void> _startNewRound() async {
     if (_currentRound >= totalRounds) {
-      _endGame();
+      await _endGame();
       return;
     }
 
@@ -274,14 +274,14 @@ class _SpeedTapScreenState extends State<SpeedTapScreen>
     _startNewRound();
   }
 
-  void _endGame() {
+  Future<void> _endGame() async {
     _roundTimer?.cancel();
     _pulseController.stop();
 
     setState(() {
       _gameEnded = true;
     });
-    _saveGameResult();
+    await _saveGameResult();
   }
 
   /// Saves the game result to Firestore for cognitive index tracking
@@ -321,7 +321,7 @@ class _SpeedTapScreenState extends State<SpeedTapScreen>
           final activityLog = ActivityLog.brainGame(
             seniorId: user.uid,
             timestamp: result.timestamp,
-            gameType: 'Speed Tap',
+            gameType: 'speed_tap', // Standardized: snake_case for all game types
             score: score.round(),
           );
           await firestoreService.logActivity(user.uid, activityLog);
@@ -368,14 +368,30 @@ class _SpeedTapScreenState extends State<SpeedTapScreen>
     _startCountdown();
   }
 
+  /// Flag to prevent double-saving (once in dispose, once in endGame)
+  bool _resultsSaved = false;
+
   @override
   void dispose() {
     _roundTimer?.cancel();
     _countdownTimer?.cancel();
+    // Note: We save proactively via _handleExit() instead of calling async methods here
+    // since context and mounted are not valid during dispose.
     _fadeController.dispose();
     _pulseController.dispose();
     _shakeController.dispose();
     super.dispose();
+  }
+
+  /// Handles exit by saving game results proactively before popping.
+  Future<void> _handleExit() async {
+    if (_gameStarted && !_gameEnded && !_resultsSaved && _currentRound > 0) {
+      _resultsSaved = true;
+      await _saveGameResult();
+    }
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -856,7 +872,7 @@ class _SpeedTapScreenState extends State<SpeedTapScreen>
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: GestureDetector(
-          onTap: () => Navigator.pop(context),
+          onTap: _handleExit,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             decoration: BoxDecoration(
