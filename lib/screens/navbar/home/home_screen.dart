@@ -1883,6 +1883,17 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   // Tracking for local notification triggers (detect state changes)
   bool _previousSosActive = false;
   int _previousMissedCheckInsToday = 0;
+  SeniorCheckInStatus? _previousStatus; // Track status changes for immediate notification
+  bool _isFirstStreamEmission = true; // Prevent notification on first load
+  
+  /// Atomically initializes missed check-in baseline on first stream emission.
+  /// Returns true if this was the first emission (baseline set), false otherwise.
+  bool _tryInitializeFamilyMissedCount(int count) {
+    if (!_isFirstStreamEmission) return false;
+    _isFirstStreamEmission = false;
+    _previousMissedCheckInsToday = count;
+    return true; // Was first emission - don't trigger notification
+  }
 
   @override
   void initState() {
@@ -2272,14 +2283,32 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
         _previousSosActive = currentSosActive;
         
         // Missed Check-in: Notify if count increased
+        // Use atomic helper to prevent notification on first stream emission
         final int currentMissed = seniorState?.missedCheckInsToday ?? 0;
-        if (currentMissed > _previousMissedCheckInsToday && currentMissed > 0) {
+        final wasFirstEmission = _tryInitializeFamilyMissedCount(currentMissed);
+        if (!wasFirstEmission && currentMissed > _previousMissedCheckInsToday && currentMissed > 0) {
           NotificationService().showFamilyMissedCheckInNotification(
             missedCount: currentMissed,
             seniorId: seniorId,
           );
         }
         _previousMissedCheckInsToday = currentMissed;
+        
+        // Status Change to Alert: Notify immediately when check-in time passes
+        // This provides faster notification than waiting for Cloud Function to update missedCheckInsToday
+        // Only trigger if status changed TO alert (not SOS, which has separate handling)
+        final bool statusChangedToAlert = newStatus == SeniorCheckInStatus.alert && 
+            _previousStatus != null && 
+            _previousStatus != SeniorCheckInStatus.alert &&
+            !(seniorState?.sosActive ?? false); // Don't double-notify for SOS
+        if (statusChangedToAlert) {
+          debugPrint('📢 Family notification: Status changed to alert (check-in time passed)');
+          NotificationService().showFamilyMissedCheckInNotification(
+            missedCount: 1, // At least 1 missed
+            seniorId: seniorId,
+          );
+        }
+        _previousStatus = newStatus;
         
         setState(() {
           _currentSeniorState = seniorState;
@@ -2374,6 +2403,11 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       _gameResults = [];
       _cognitiveMetrics = null;
       _vaultData = null;
+      // Reset notification tracking for new senior
+      _previousMissedCheckInsToday = 0;
+      _previousSosActive = false;
+      _previousStatus = null;
+      _isFirstStreamEmission = true;
     });
     
     _loadSeniorDetails(seniorId);

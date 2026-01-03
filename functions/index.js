@@ -657,8 +657,8 @@ async function sendMissedCheckInNotification(userId, missedCount) {
     
     // Build notification based on missed count
     const title = missedCount === 1 
-      ? "Check-in Reminder"
-      : "Multiple Missed Check-ins";
+      ? "Check-in Reminder (FCM)"
+      : "Multiple Missed Check-ins (FCM)";
     
     const body = missedCount === 1
       ? "You haven't checked in yet today. Tap to let your family know you're okay!"
@@ -931,7 +931,7 @@ exports.handleMissedCheckIn = onRequest({
               return admin.messaging().send({
                 token: familyFcmToken,
                 notification: {
-                  title: "Missed Check-in Alert",
+                  title: "Missed Check-in Alert (FCM)",
                   body: "Your senior has missed a scheduled check-in. Please check on them.",
                 },
                 data: {
@@ -1208,7 +1208,7 @@ exports.onSOSTriggered = onDocumentWritten({
   
   if (sosTriggeredAt && prevTriggeredAt) {
     const diffMs = sosTriggeredAt.getTime() - prevTriggeredAt.getTime();
-    const cooldownMs = 5 * 60 * 1000; // 5 minutes
+    const cooldownMs = 1 * 60 * 1000; // 1 minute (matches client-side cooldown)
     
     if (diffMs < cooldownMs) {
       logger.info(`SOS cooldown active for user ${userId}, skipping notification`, {
@@ -1270,7 +1270,7 @@ exports.onSOSTriggered = onDocumentWritten({
     const message = {
       tokens,
       notification: {
-        title: "🚨 SOS Alert!",
+        title: "🚨 SOS Alert! (FCM)",
         body: `${seniorName} needs help! Tap to respond.`,
       },
       data: {
@@ -1294,7 +1294,7 @@ exports.onSOSTriggered = onDocumentWritten({
             sound: "default",
             badge: 1,
             alert: {
-              title: "🚨 SOS Alert!",
+              title: "🚨 SOS Alert! (FCM)",
               body: `${seniorName} needs help! Tap to respond.`,
             },
           },

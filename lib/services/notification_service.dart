@@ -47,9 +47,9 @@ class NotificationService {
   static const int missedCheckInNotificationId = 1001;
   
   /// Cooldown period to prevent duplicate notifications (Timer + Firestore stream race)
-  static const Duration _notificationCooldown = Duration(seconds: 30);
-  /// SOS-specific cooldown period (5 minutes) to prevent repeated SOS alerts
-  static const Duration _sosCooldown = Duration(minutes: 5);
+  static const Duration _notificationCooldown = Duration(minutes: 1);
+  /// SOS-specific cooldown period to prevent repeated SOS alerts
+  static const Duration _sosCooldown = Duration(minutes: 1);
   static const String _cooldownPrefKey = 'notification_last_shown_timestamp';
   DateTime? _lastNotificationTime;
   
@@ -130,10 +130,16 @@ class NotificationService {
     }
   }
   
-  /// Creates the Android notification channel.
+  /// Creates the Android notification channels.
   /// Required for Android 8.0+ (API 26+).
   Future<void> _createNotificationChannel() async {
-    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    final AndroidFlutterLocalNotificationsPlugin? androidPlugin =
+        _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    
+    if (androidPlugin == null) return;
+    
+    // Check-in reminders channel
+    const AndroidNotificationChannel checkInChannel = AndroidNotificationChannel(
       _channelId,
       _channelName,
       description: _channelDescription,
@@ -141,14 +147,34 @@ class NotificationService {
       playSound: true,
       enableVibration: true,
     );
+    await androidPlugin.createNotificationChannel(checkInChannel);
+    debugPrint('Android notification channel created: $_channelId');
     
-    final AndroidFlutterLocalNotificationsPlugin? androidPlugin =
-        _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    // SOS alerts channel - critical priority for emergencies
+    // This channel is required for background FCM notifications with channelId: "sos_alerts"
+    const AndroidNotificationChannel sosChannel = AndroidNotificationChannel(
+      'sos_alerts',
+      'SOS Alerts',
+      description: 'Emergency SOS alerts from family members',
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+      enableLights: true,
+    );
+    await androidPlugin.createNotificationChannel(sosChannel);
+    debugPrint('Android notification channel created: sos_alerts');
     
-    if (androidPlugin != null) {
-      await androidPlugin.createNotificationChannel(channel);
-      debugPrint('Android notification channel created: $_channelId');
-    }
+    // High importance channel for family alerts (used by FCM for missed check-in alerts)
+    const AndroidNotificationChannel familyChannel = AndroidNotificationChannel(
+      'high_importance_channel',
+      'Family Alerts',
+      description: 'Important alerts about your family members',
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+    );
+    await androidPlugin.createNotificationChannel(familyChannel);
+    debugPrint('Android notification channel created: high_importance_channel');
   }
   
   /// Loads the persisted cooldown timestamp from SharedPreferences.
@@ -299,8 +325,8 @@ class NotificationService {
       
       // Build notification content
       final String title = missedCount == 1
-          ? "Check-in Reminder"
-          : "Multiple Missed Check-ins";
+          ? "Check-in Reminder (Local)"
+          : "Multiple Missed Check-ins (Local)";
       
       final String body = missedCount == 1
           ? "You haven't checked in yet today. Tap to let your family know you're okay!"
@@ -454,7 +480,7 @@ class NotificationService {
     }
     
     // Build notification content - customize message for family
-    final String title = "Missed Check-in Alert";
+    final String title = "Missed Check-in Alert (Local)";
     final String body = missedCount == 1
         ? "Your linked senior has missed a check-in. Please ensure they are okay."
         : "Your linked senior has missed $missedCount check-ins. Please check on them immediately.";
@@ -525,7 +551,7 @@ class NotificationService {
     }
     
     // Build notification content
-    const String title = '🚨 SOS Alert!';
+    const String title = '🚨 SOS Alert! (Local)';
     final String body = '$seniorName needs help! Tap to respond.';
     
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
