@@ -37,8 +37,11 @@ class WellnessDataPoint {
     if (mood == null) return null;
     switch (mood.toLowerCase()) {
       case 'happy': return 1.0;
-      case 'neutral': return 0.6;
-      case 'sad': return 0.2;
+      case 'neutral': return 0.7;
+      case 'down': return 0.4;
+      case 'very_sad': return 0.1;
+      // Legacy values for backward compatibility
+      case 'sad': return 0.4;
       default: return 0.5;
     }
   }
@@ -46,8 +49,12 @@ class WellnessDataPoint {
   static double? _normalizeSleep(String? sleep) {
     if (sleep == null) return null;
     switch (sleep.toLowerCase()) {
-      case 'good': return 1.0;
-      case 'average': return 0.6;
+      case 'great': return 1.0;
+      case 'good': return 0.8;
+      case 'okay': return 0.5;
+      case 'poorly': return 0.2;
+      // Legacy values for backward compatibility
+      case 'average': return 0.5;
       case 'poor': return 0.2;
       default: return 0.5;
     }
@@ -56,9 +63,12 @@ class WellnessDataPoint {
   static double? _normalizeEnergy(String? energy) {
     if (energy == null) return null;
     switch (energy.toLowerCase()) {
-      case 'high': return 1.0;
-      case 'medium': return 0.6;
-      case 'low': return 0.2;
+      case 'great': return 1.0;
+      case 'good': return 0.8;
+      case 'high': return 1.0; // Legacy
+      case 'medium': return 0.6; // Legacy
+      case 'low': return 0.4;
+      case 'very_tired': return 0.1;
       default: return 0.5;
     }
   }

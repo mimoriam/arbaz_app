@@ -994,11 +994,19 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
       opacity: _fadeAnimation,
       child: SlideTransition(
         position: _slideAnimation,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight,
+                  minWidth: constraints.maxWidth,
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
               const SizedBox(height: 60),
 
               // Success Checkmark with Glow
@@ -1077,79 +1085,78 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
               //     ),
               //   ),
               // ],
-              const SizedBox(height: 16),
-
-              // Voice Note Card
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: isDarkMode ? AppColors.surfaceDark : Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: isDarkMode
-                        ? AppColors.borderDark
-                        : AppColors.borderLight,
-                  ),
-                  boxShadow: isDarkMode
-                      ? null
-                      : [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.04),
-                            blurRadius: 16,
-                            offset: const Offset(0, 6),
-                          ),
-                        ],
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      "Want to leave a voice note?",
-                      style: GoogleFonts.inter(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: isDarkMode
-                            ? AppColors.textPrimaryDark
-                            : AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    // Microphone Button
-                    GestureDetector(
-                      onTap: () {
-                        // TODO: Implement voice recording
-                      },
-                      child: Container(
-                        width: 64,
-                        height: 64,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: AppColors.primaryBlue.withValues(alpha: 0.1),
-                        ),
-                        child: const Icon(
-                          Icons.mic,
-                          size: 32,
-                          color: AppColors.primaryBlue,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Sample text
-                    Text(
-                      '"Doctor appointment went well!"',
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w400,
-                        fontStyle: FontStyle.italic,
-                        color: AppColors.primaryBlue,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
               const SizedBox(height: 48),
+
+              // TODO: Voice Note Card - Implement in future update
+              // Container(
+              //   width: double.infinity,
+              //   padding: const EdgeInsets.all(24),
+              //   decoration: BoxDecoration(
+              //     color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+              //     borderRadius: BorderRadius.circular(24),
+              //     border: Border.all(
+              //       color: isDarkMode
+              //           ? AppColors.borderDark
+              //           : AppColors.borderLight,
+              //     ),
+              //     boxShadow: isDarkMode
+              //         ? null
+              //         : [
+              //             BoxShadow(
+              //               color: Colors.black.withValues(alpha: 0.04),
+              //               blurRadius: 16,
+              //               offset: const Offset(0, 6),
+              //             ),
+              //           ],
+              //   ),
+              //   child: Column(
+              //     children: [
+              //       Text(
+              //         "Want to leave a voice note?",
+              //         style: GoogleFonts.inter(
+              //           fontSize: 16,
+              //           fontWeight: FontWeight.w600,
+              //           color: isDarkMode
+              //               ? AppColors.textPrimaryDark
+              //               : AppColors.textPrimary,
+              //         ),
+              //       ),
+              //       const SizedBox(height: 20),
+              //
+              //       // Microphone Button
+              //       GestureDetector(
+              //         onTap: () {
+              //           // TODO: Implement voice recording
+              //         },
+              //         child: Container(
+              //           width: 64,
+              //           height: 64,
+              //           decoration: BoxDecoration(
+              //             shape: BoxShape.circle,
+              //             color: AppColors.primaryBlue.withValues(alpha: 0.1),
+              //           ),
+              //           child: const Icon(
+              //             Icons.mic,
+              //             size: 32,
+              //             color: AppColors.primaryBlue,
+              //           ),
+              //         ),
+              //       ),
+              //       const SizedBox(height: 16),
+              //
+              //       // Sample text
+              //       Text(
+              //         '"Doctor appointment went well!"',
+              //         style: GoogleFonts.inter(
+              //           fontSize: 14,
+              //           fontWeight: FontWeight.w400,
+              //           fontStyle: FontStyle.italic,
+              //           color: AppColors.primaryBlue,
+              //         ),
+              //       ),
+              //     ],
+              //   ),
+              // ),
 
               // Back Home Button
               GestureDetector(
@@ -1165,8 +1172,11 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
                 ),
               ),
               const SizedBox(height: 40),
-            ],
-          ),
+                  ],
+                ),
+              ),
+            );
+          },
         ),
       ),
     );

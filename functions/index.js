@@ -408,8 +408,13 @@ async function createCloudTask(userId, scheduledTime, userTimezone) {
     timezone: userTimezone || TIMEZONE,
   };
 
-  // Get the function URL for handleMissedCheckIn
-  const functionUrl = `https://${CLOUD_TASKS_LOCATION}-${PROJECT_ID}.cloudfunctions.net/handleMissedCheckIn`;
+  // Get the function URL for handleMissedCheckIn (Cloud Run / v2 Functions format)
+  // Format: https://handlemissedcheckin-{hash}-{region code}.a.run.app
+  // We use environment variable FUNCTION_TARGET or construct from project ID
+  // Note: For v2 functions, the URL pattern is different from v1
+  // Using the deployed URL directly for reliability
+  const functionUrl = process.env.HANDLE_MISSED_CHECKIN_URL || 
+    `https://handlemissedcheckin-kkx7gmy44a-uc.a.run.app`;
 
   const task = {
     httpRequest: {
@@ -441,6 +446,7 @@ async function createCloudTask(userId, scheduledTime, userTimezone) {
 
       logger.info(`Created Cloud Task for user ${userId}`, { 
         taskName: response.name,
+        functionUrl,
         scheduledTime: scheduledTime.toISOString(),
         executeAt: executeAt.toISOString(),
         attempt,
@@ -724,8 +730,11 @@ exports.handleMissedCheckIn = onRequest({
   timeoutSeconds: 60,
   memory: "256MiB",
 }, async (req, res) => {
+  logger.info("=== handleMissedCheckIn STARTED ===");
+  
   // Validate request
   if (req.method !== "POST") {
+    logger.error("handleMissedCheckIn: Invalid method", { method: req.method });
     res.status(405).send("Method not allowed");
     return;
   }
@@ -736,6 +745,7 @@ exports.handleMissedCheckIn = onRequest({
     if (typeof payload === "string") {
       payload = JSON.parse(payload);
     }
+    logger.info("handleMissedCheckIn: Payload parsed", { payload });
   } catch (error) {
     logger.error("Invalid request payload:", { error: error.message });
     res.status(400).send("Invalid payload");
@@ -750,7 +760,7 @@ exports.handleMissedCheckIn = onRequest({
     return;
   }
   
-  logger.info(`Handling missed check-in for user ${userId}`, { scheduledTime, createdAt });
+  logger.info(`handleMissedCheckIn: Processing for user ${userId}`, { scheduledTime, createdAt, timezone });
   
   const seniorStateRef = db.collection("users").doc(userId).collection("data").doc("seniorState");
   const now = new Date();
@@ -758,18 +768,26 @@ exports.handleMissedCheckIn = onRequest({
   try {
     // Capture missedCount from transaction for FCM notification
     const missedCount = await db.runTransaction(async (transaction) => {
+      logger.info(`handleMissedCheckIn: Starting transaction for ${userId}`);
+      
       const seniorStateDoc = await transaction.get(seniorStateRef);
       
       if (!seniorStateDoc.exists) {
-        logger.info(`Senior state not found for user ${userId}`);
+        logger.info(`handleMissedCheckIn: Senior state NOT FOUND for user ${userId} - EXITING`);
         return null; // Explicit null return for no action
       }
       
       const data = seniorStateDoc.data();
+      logger.info(`handleMissedCheckIn: Senior state found for ${userId}`, {
+        vacationMode: data.vacationMode,
+        lastCheckIn: data.lastCheckIn?.toDate?.()?.toISOString(),
+        missedCheckInsToday: data.missedCheckInsToday,
+        checkInSchedules: data.checkInSchedules,
+      });
       
       // Check if vacation mode was enabled after task creation
       if (data.vacationMode) {
-        logger.info(`User ${userId} is now on vacation, skipping missed check-in`);
+        logger.info(`handleMissedCheckIn: User ${userId} is on VACATION - EXITING`);
         return null;
       }
       
@@ -778,22 +796,28 @@ exports.handleMissedCheckIn = onRequest({
       const taskCreatedAt = new Date(createdAt);
       
       if (lastCheckIn && lastCheckIn > taskCreatedAt) {
-        logger.info(`User ${userId} checked in after task creation, not a miss`);
+        logger.info(`handleMissedCheckIn: User ${userId} checked in AFTER task creation - EXITING`, {
+          lastCheckIn: lastCheckIn.toISOString(),
+          taskCreatedAt: taskCreatedAt.toISOString(),
+        });
         return null;
       }
       
-      // Also check if checked in today (same day as scheduled time)
+      // Multi-schedule support: Check if THIS SPECIFIC schedule was already completed today
+      // (The TOCTOU check above handles generic "checked in after task was created" cases)
       const scheduledDateTime = new Date(scheduledTime);
-      if (lastCheckIn) {
-        const tz = timezone || TIMEZONE;
-        const lastCheckInLuxon = DateTime.fromJSDate(lastCheckIn, { zone: tz });
-        const scheduledLuxon = DateTime.fromJSDate(scheduledDateTime, { zone: tz });
-        
-        if (lastCheckInLuxon.hasSame(scheduledLuxon, "day")) {
-          logger.info(`User ${userId} already checked in today`);
-          return null;
-        }
+      const missedScheduleStr = formatTimeToSchedule(scheduledDateTime);
+      const completedSchedulesToday = data.completedSchedulesToday || [];
+      
+      // Normalize for comparison
+      const normalizedCompleted = completedSchedulesToday.map(s => s.toUpperCase().trim());
+      const normalizedMissed = missedScheduleStr.toUpperCase().trim();
+      
+      if (normalizedCompleted.includes(normalizedMissed)) {
+        logger.info(`handleMissedCheckIn: Schedule ${missedScheduleStr} already COMPLETED today for user ${userId} - EXITING`);
+        return null;
       }
+
       
       // Day 1 check: Skip ONLY if account was created today AND using only default schedule
       // If user adds custom schedules on Day 1, those SHOULD work normally
@@ -808,7 +832,7 @@ exports.handleMissedCheckIn = onRequest({
         const nowLuxon = DateTime.fromJSDate(now, { zone: tz });
         
         if (createdLuxon.hasSame(nowLuxon, "day")) {
-          logger.info(`User ${userId} is on day 1 with default schedule only, skipping missed check-in`);
+          logger.info(`handleMissedCheckIn: User ${userId} is on DAY 1 with default schedule - EXITING`);
           // Still schedule for tomorrow
           return null;
         }
@@ -819,14 +843,18 @@ exports.handleMissedCheckIn = onRequest({
       // Use scheduledDateTime for idempotency key (not 'now') to prevent duplicate logs across day boundaries
       const docId = getMissedCheckInKey(userId, missedSchedule, scheduledDateTime);
       
+      logger.info(`handleMissedCheckIn: Checking idempotency for ${userId}`, { docId, missedSchedule });
+      
       // Check if we already logged this miss (idempotency)
       const activityRef = db.collection("users").doc(userId).collection("activityLogs").doc(docId);
       const existingLog = await transaction.get(activityRef);
       
       if (existingLog.exists) {
-        logger.info(`Missed check-in already logged for user ${userId}`);
+        logger.info(`handleMissedCheckIn: Already logged for user ${userId} - EXITING (idempotency)`);
         return null;
       }
+      
+      logger.info(`handleMissedCheckIn: GENUINE MISS for user ${userId} - proceeding with notifications`);
       
       // Log the missed check-in
       transaction.set(activityRef, {
@@ -854,7 +882,7 @@ exports.handleMissedCheckIn = onRequest({
       
       transaction.update(seniorStateRef, updates);
       
-      logger.info(`Logged missed check-in for user ${userId}`, {
+      logger.info(`handleMissedCheckIn: Logged missed check-in for user ${userId}`, {
         consecutiveMissedDays: newConsecutive,
         missedSchedule,
       });
@@ -896,11 +924,15 @@ exports.handleMissedCheckIn = onRequest({
       }
       
       // Return missedCount for FCM notification (now properly captured outside)
+      logger.info(`handleMissedCheckIn: Transaction SUCCESS, returning missedCount=${computedMissedCount}`);
       return computedMissedCount;
     });
     
+    logger.info(`handleMissedCheckIn: Transaction completed for ${userId}`, { missedCount });
+    
     // Send FCM push notification outside transaction (non-blocking)
     if (missedCount != null && missedCount > 0) {
+      logger.info(`handleMissedCheckIn: Sending FCM notifications for ${userId} (missedCount=${missedCount})`);
       try {
         // 1. Notify the Senior
         await sendMissedCheckInNotification(userId, missedCount);
@@ -912,11 +944,16 @@ exports.handleMissedCheckIn = onRequest({
           .where("seniorId", "==", userId)
           .where("status", "==", "active")
           .get();
+        
+        logger.info(`Family notification: Found ${connectionsSnapshot.size} active connections for senior ${userId}`);
           
         if (!connectionsSnapshot.empty) {
           const familyNotificationPromises = connectionsSnapshot.docs.map(async (doc) => {
             const connectionData = doc.data();
             const familyUserId = connectionData.familyId;
+            
+            logger.info(`Family notification: Processing family member ${familyUserId}`);
+            
             // Get family user's FCM token from correct subcollection path
             const familyProfileDoc = await db.collection("users")
               .doc(familyUserId)
@@ -924,60 +961,81 @@ exports.handleMissedCheckIn = onRequest({
               .doc("profile")
               .get();
               
+            if (!familyProfileDoc.exists) {
+              logger.warn(`Family notification: Profile not found for family user ${familyUserId}`);
+              return null;
+            }
+            
             const familyData = familyProfileDoc.data();
             const familyFcmToken = familyData?.fcmToken;
             
+            logger.info(`Family notification: Family ${familyUserId} token status: ${familyFcmToken ? 'PRESENT' : 'MISSING'}`);
+            
             if (familyFcmToken) {
-              return admin.messaging().send({
-                token: familyFcmToken,
-                notification: {
-                  title: "Missed Check-in Alert (FCM)",
-                  body: "Your senior has missed a scheduled check-in. Please check on them.",
-                },
-                data: {
-                  type: "family_missed_alert",
-                  seniorUserId: userId,
-                  missedCount: String(missedCount),
-                  click_action: "FLUTTER_NOTIFICATION_CLICK",
-                },
-                android: {
-                  priority: "high",
+              try {
+                const result = await admin.messaging().send({
+                  token: familyFcmToken,
                   notification: {
-                    channelId: "high_importance_channel",
-                    priority: "max",
-                    visibility: "public",
+                    title: "Missed Check-in Alert (FCM)",
+                    body: "Your senior has missed a scheduled check-in. Please check on them.",
                   },
-                },
-                apns: {
-                  payload: {
-                    aps: {
-                      sound: "default",
-                      "content-available": 1,
+                  data: {
+                    type: "family_missed_alert",
+                    seniorUserId: userId,
+                    missedCount: String(missedCount),
+                    click_action: "FLUTTER_NOTIFICATION_CLICK",
+                  },
+                  android: {
+                    priority: "high",
+                    notification: {
+                      channelId: "high_importance_channel",
+                      priority: "max",
+                      visibility: "public",
                     },
                   },
-                },
-              });
+                  apns: {
+                    payload: {
+                      aps: {
+                        sound: "default",
+                        "content-available": 1,
+                      },
+                    },
+                  },
+                });
+                logger.info(`Family notification: Successfully sent to ${familyUserId}, messageId: ${result}`);
+                return result;
+              } catch (sendError) {
+                logger.error(`Family notification: Failed to send to ${familyUserId}:`, { error: sendError.message, code: sendError.code });
+                return null;
+              }
             } else {
                logger.warn(`No FCM token found for family user ${familyUserId}`);
+               return null;
             }
           });
           
-          await Promise.allSettled(familyNotificationPromises);
-          logger.info(`Sent family notifications for user ${userId}`);
+          const results = await Promise.allSettled(familyNotificationPromises);
+          const successCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
+          logger.info(`Sent family notifications for user ${userId}: ${successCount}/${results.length} succeeded`);
+        } else {
+          logger.info(`Family notification: No active connections found for senior ${userId}`);
         }
         
       } catch (fcmError) {
         // Log but don't fail the request - FCM is best-effort
         logger.error(`FCM notification failed for user ${userId}:`, { error: fcmError.message });
       }
+    } else {
+      logger.info(`handleMissedCheckIn: Skipping notifications - missedCount is ${missedCount} (null or 0 means no genuine miss)`);
     }
     
     // Schedule next day's task (outside transaction for simplicity)
     await scheduleCheckInTask(userId);
     
+    logger.info(`=== handleMissedCheckIn COMPLETED for ${userId} ===`);
     res.status(200).send("OK");
   } catch (error) {
-    logger.error(`Error handling missed check-in for user ${userId}:`, { error: error.message });
+    logger.error(`handleMissedCheckIn ERROR for user ${userId}:`, { error: error.message, stack: error.stack });
     res.status(500).send("Internal error");
   }
 });

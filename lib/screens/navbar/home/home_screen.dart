@@ -808,56 +808,178 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       builder: (context, vacationProvider, child) {
         final isVacationMode = vacationProvider.isVacationMode;
 
-        return Scaffold(
-          backgroundColor: isDarkMode
-              ? AppColors.backgroundDark
-              : AppColors.backgroundLight,
-          body: SafeArea(
-            child: Column(
-              children: [
-                // Header Section
-                _buildHeader(isDarkMode),
+        return PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, result) async {
+            if (didPop) return;
+            final shouldExit = await _showExitConfirmationDialog(context);
+            if (shouldExit == true && context.mounted) {
+              SystemNavigator.pop();
+            }
+          },
+          child: Scaffold(
+            backgroundColor: isDarkMode
+                ? AppColors.backgroundDark
+                : AppColors.backgroundLight,
+            body: SafeArea(
+              child: Column(
+                children: [
+                  // Header Section
+                  _buildHeader(isDarkMode),
 
-                // Vacation Mode Card (if enabled)
-                if (isVacationMode) _buildVacationModeCard(isDarkMode),
+                  // Vacation Mode Card (if enabled)
+                  if (isVacationMode) _buildVacationModeCard(isDarkMode),
 
-                // Main Content
-                Expanded(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Column(
-                      children: [
-                        SizedBox(height: screenHeight * 0.03),
+                  // Main Content
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Column(
+                        children: [
+                          SizedBox(height: screenHeight * 0.03),
 
-                        // Large Status Circle Button
-                        _buildStatusButton(
-                          isVacationMode: isVacationMode,
-                          isLoading:
-                              vacationProvider.isLoading ||
-                              _isLoadingCheckInStatus,
-                        ),
+                          // Large Status Circle Button
+                          _buildStatusButton(
+                            isVacationMode: isVacationMode,
+                            isLoading:
+                                vacationProvider.isLoading ||
+                                _isLoadingCheckInStatus,
+                          ),
 
-                        SizedBox(height: screenHeight * 0.05),
+                          SizedBox(height: screenHeight * 0.05),
 
-                        // Daily Health Message Section
-                        _buildHealthMessageSection(
-                          isDarkMode,
-                          isLoading: vacationProvider.isLoading || _isLoadingCheckInStatus,
-                        ),
+                          // Daily Health Message Section
+                          _buildHealthMessageSection(
+                            isDarkMode,
+                            isLoading: vacationProvider.isLoading || _isLoadingCheckInStatus,
+                          ),
 
-                        SizedBox(height: screenHeight * 0.05),
-                      ],
+                          SizedBox(height: screenHeight * 0.05),
+                        ],
+                      ),
                     ),
                   ),
-                ),
 
-                // Emergency SOS Bar (Smart)
-                _buildSmartEmergencyBar(),
-              ],
+                  // Emergency SOS Bar (Smart)
+                  _buildSmartEmergencyBar(),
+                ],
+              ),
             ),
           ),
         );
       },
+    );
+  }
+
+  /// Shows a styled exit confirmation dialog
+  Future<bool?> _showExitConfirmationDialog(BuildContext context) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        backgroundColor: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // App Icon
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: AppColors.primaryBlue.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.exit_to_app_rounded,
+                  size: 32,
+                  color: AppColors.primaryBlue,
+                ),
+              ),
+              const SizedBox(height: 20),
+              
+              // Title
+              Text(
+                'Exit SafeCheck?',
+                style: GoogleFonts.inter(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              
+              // Subtitle
+              Text(
+                'Are you sure you want to exit the app?',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 24),
+              
+              // Buttons
+              Row(
+                children: [
+                  // Exit Button (Red Outlined)
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(context).pop(true),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.dangerRed,
+                        side: const BorderSide(color: AppColors.dangerRed),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+                        'Exit',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  
+                  // Stay Button (Primary Blue)
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryBlue,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: Text(
+                        'Stay',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -1859,6 +1981,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   List<WellnessDataPoint> _weeklyWellnessData = [];
   StreamSubscription? _seniorStateSubscription;
   StreamSubscription? _connectionsSubscription; // Listen for new connections
+  StreamSubscription? _checkInsSubscription; // Listen for new check-ins (real-time wellness)
   String _familyName = ''; // Empty until loaded
   bool _isLoadingFamilyProfile = true; // Loading state for profile
   
@@ -1885,6 +2008,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   int _previousMissedCheckInsToday = 0;
   SeniorCheckInStatus? _previousStatus; // Track status changes for immediate notification
   bool _isFirstStreamEmission = true; // Prevent notification on first load
+  DateTime? _previousLastCheckIn; // Track check-in changes for real-time wellness updates
   
   /// Atomically initializes missed check-in baseline on first stream emission.
   /// Returns true if this was the first emission (baseline set), false otherwise.
@@ -1982,6 +2106,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   void dispose() {
     _connectionsSubscription?.cancel();
     _seniorStateSubscription?.cancel();
+    _checkInsSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
   }
@@ -2322,6 +2447,20 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           );
         });
         
+        // Real-time wellness data update: Reload when lastCheckIn changes
+        // This ensures Status/Health tabs update immediately when senior checks in
+        // Also reload on first detection of lastCheckIn (not just changes)
+        final bool isCurrentMonth = _selectedMonth.year == DateTime.now().year &&
+            _selectedMonth.month == DateTime.now().month;
+        final bool lastCheckInChanged = newLastCheckIn != null && 
+            (_previousLastCheckIn == null || newLastCheckIn != _previousLastCheckIn);
+        
+        if (lastCheckInChanged && isCurrentMonth) {
+          debugPrint('📊 New check-in detected, reloading wellness data...');
+          _reloadWellnessData(seniorId);
+        }
+        _previousLastCheckIn = newLastCheckIn;
+        
         debugPrint('📡 Senior state stream update: vacation=${seniorState?.vacationMode}, lastCheckIn=$newLastCheckIn, status=$newStatus, sos=$currentSosActive, missed=$currentMissed');
       },
       onError: (error) {
@@ -2408,9 +2547,107 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       _previousSosActive = false;
       _previousStatus = null;
       _isFirstStreamEmission = true;
+      _previousLastCheckIn = null;
     });
     
     _loadSeniorDetails(seniorId);
+  }
+
+  /// Reloads wellness data for the current month when a new check-in is detected
+  /// This enables real-time updates on the Health tab without full data reload
+  Future<void> _reloadWellnessData(String seniorId) async {
+    if (!mounted) return;
+    
+    final firestoreService = context.read<FirestoreService>();
+    
+    try {
+      final checkIns = await firestoreService.getCheckInsForMonth(
+        seniorId,
+        _selectedMonth.year,
+        _selectedMonth.month,
+      );
+      final newWellnessData = checkIns
+          .map((c) => WellnessDataPoint.fromCheckIn(c))
+          .toList();
+      
+      if (mounted) {
+        setState(() {
+          _weeklyWellnessData = newWellnessData;
+        });
+        debugPrint('📊 Wellness data reloaded: ${newWellnessData.length} data points');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error reloading wellness data: $e');
+    }
+  }
+
+  /// Calculates check-in success rate matching calendar view logic.
+  /// 
+  /// Uses hybrid approach:
+  /// - Groups check-ins by day
+  /// - Calculates daily completion as min(checkIns, scheduled) / scheduled
+  /// - Averages across all days from effective start to today
+  /// 
+  /// This ensures family home view shows the same success rate as calendar.
+  int _calculateCheckInSuccessRate() {
+    if (_weeklyWellnessData.isEmpty) return 0;
+    
+    final now = DateTime.now();
+    final monthStart = DateTime(_selectedMonth.year, _selectedMonth.month, 1);
+    final monthEnd = (_selectedMonth.year == now.year && _selectedMonth.month == now.month)
+        ? now
+        : DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0);
+    
+    // Group check-ins by day
+    final Map<int, List<WellnessDataPoint>> checkInsByDay = {};
+    for (final point in _weeklyWellnessData) {
+      if (point.date.year == _selectedMonth.year && 
+          point.date.month == _selectedMonth.month) {
+        final day = point.date.day;
+        checkInsByDay.putIfAbsent(day, () => []);
+        checkInsByDay[day]!.add(point);
+      }
+    }
+    
+    if (checkInsByDay.isEmpty) return 0;
+    
+    // Get scheduled count from senior state (default to 1)
+    final scheduledCount = _currentSeniorState?.checkInSchedules.length ?? 1;
+    
+    // Calculate hybrid success rate: avg of daily completions
+    double totalCompletion = 0.0;
+    int daysWithCheckIns = 0;
+    
+    for (final entry in checkInsByDay.entries) {
+      final day = entry.key;
+      final dayRecords = entry.value;
+      if (dayRecords.isEmpty) continue;
+      
+      // Only count days within the valid range
+      final dayDate = DateTime(_selectedMonth.year, _selectedMonth.month, day);
+      if (dayDate.isBefore(monthStart) || dayDate.isAfter(monthEnd)) continue;
+      
+      // Calculate daily completion: min(actual, scheduled) / scheduled
+      // Cap at 100% (extra check-ins don't boost score)
+      final checkInCount = dayRecords.length;
+      final dailyCompletion = scheduledCount > 0
+          ? (checkInCount.clamp(0, scheduledCount) / scheduledCount)
+          : 1.0;
+      
+      totalCompletion += dailyCompletion;
+      daysWithCheckIns++;
+    }
+    
+    // Calculate days since start of month (or senior start) to today
+    // For days with no check-ins at all, they count as 0% completion
+    int daysToCount = monthEnd.difference(monthStart).inDays + 1;
+    
+    // Average = (sum of daily completions) / (total days expected)
+    // Using daysWithCheckIns to match calendar behavior (only count days with activity)
+    if (daysWithCheckIns == 0) return 0;
+    
+    final successRate = ((totalCompletion / daysToCount) * 100).toInt().clamp(0, 100);
+    return successRate;
   }
 
   SeniorCheckInStatus _calculateSeniorStatus(
@@ -2671,59 +2908,181 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   Widget build(BuildContext context) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-    return Scaffold(
-      backgroundColor: isDarkMode
-          ? AppColors.backgroundDark
-          : AppColors.backgroundLight,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Custom Header
-            _buildHeader(isDarkMode),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        final shouldExit = await _showExitConfirmationDialog(context);
+        if (shouldExit == true && context.mounted) {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: isDarkMode
+            ? AppColors.backgroundDark
+            : AppColors.backgroundLight,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // Custom Header
+              _buildHeader(isDarkMode),
 
-            const SizedBox(height: 16),
+              const SizedBox(height: 16),
 
-            // Main Content Card with Tabs
-            Expanded(
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16),
-                decoration: BoxDecoration(
-                  color: isDarkMode ? AppColors.surfaceDark : Colors.white,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(32),
-                    topRight: Radius.circular(32),
-                  ),
-                  boxShadow: isDarkMode
-                      ? null
-                      : [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.06),
-                            blurRadius: 24,
-                            offset: const Offset(0, -4),
-                          ),
-                        ],
-                ),
-                child: Column(
-                  children: [
-                    // Tab Bar
-                    _buildTabBar(isDarkMode),
-
-                    // Tab Content
-                    Expanded(
-                      child: TabBarView(
-                        controller: _tabController,
-                        children: [
-                          _buildStatusTab(isDarkMode),
-                          _buildHealthTab(isDarkMode),
-                          _buildVaultTab(isDarkMode),
-                        ],
-                      ),
+              // Main Content Card with Tabs
+              Expanded(
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                  decoration: BoxDecoration(
+                    color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(32),
+                      topRight: Radius.circular(32),
                     ),
-                  ],
+                    boxShadow: isDarkMode
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.06),
+                              blurRadius: 24,
+                              offset: const Offset(0, -4),
+                            ),
+                          ],
+                  ),
+                  child: Column(
+                    children: [
+                      // Tab Bar
+                      _buildTabBar(isDarkMode),
+
+                      // Tab Content
+                      Expanded(
+                        child: TabBarView(
+                          controller: _tabController,
+                          children: [
+                            _buildStatusTab(isDarkMode),
+                            _buildHealthTab(isDarkMode),
+                            _buildVaultTab(isDarkMode),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Shows a styled exit confirmation dialog
+  Future<bool?> _showExitConfirmationDialog(BuildContext context) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        backgroundColor: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // App Icon
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: AppColors.primaryBlue.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.exit_to_app_rounded,
+                  size: 32,
+                  color: AppColors.primaryBlue,
+                ),
+              ),
+              const SizedBox(height: 20),
+              
+              // Title
+              Text(
+                'Exit SafeCheck?',
+                style: GoogleFonts.inter(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              
+              // Subtitle
+              Text(
+                'Are you sure you want to exit the app?',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.inter(
+                  fontSize: 14,
+                  color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 24),
+              
+              // Buttons
+              Row(
+                children: [
+                  // Exit Button (Red Outlined)
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(context).pop(true),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.dangerRed,
+                        side: const BorderSide(color: AppColors.dangerRed),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+                        'Exit',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  
+                  // Stay Button (Primary Blue)
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryBlue,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: Text(
+                        'Stay',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3173,12 +3532,8 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       );
     }
 
-    // Calculate success rate from wellness data
-    final totalDays = _weeklyWellnessData.length;
-    final medicationTakenDays = _weeklyWellnessData.where((p) => p.medicationTaken).length;
-    final successRate = totalDays > 0 
-        ? ((medicationTakenDays / totalDays) * 100).toInt().clamp(0, 100)
-        : 0;
+    // Calculate success rate matching calendar view logic (check-in completion rate)
+    final successRate = _calculateCheckInSuccessRate();
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -3428,33 +3783,33 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             icon = Icons.warning_rounded;
             title = 'Check-in time passed!';
             subtitle = 'Please check on ${data.seniorName}';
-            actions = [
-              ElevatedButton.icon(
-                onPressed: () => _launchURL('tel:'), // In real app use number
-                icon: const Icon(Icons.call),
-                label: Text('Call ${data.seniorName}'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: AppColors.dangerRed,
-                ),
-              ),
-              const SizedBox(height: 8),
-              // OutlinedButton.icon(
-              //   onPressed: () {
-              //     ScaffoldMessenger.of(context).showSnackBar(
-              //       const SnackBar(
-              //         content: Text('Notifications to others sent (Placeholder)'),
-              //       ),
-              //     );
-              //   },
-              //   icon: const Icon(Icons.notifications_active),
-              //   label: const Text('Notify Others'),
-              //   style: OutlinedButton.styleFrom(
-              //     foregroundColor: Colors.white,
-              //     side: const BorderSide(color: Colors.white),
-              //   ),
-              // ),
-            ];
+            // actions = [
+            //   ElevatedButton.icon(
+            //     onPressed: () => _launchURL('tel:'), // In real app use number
+            //     icon: const Icon(Icons.call),
+            //     label: Text('Call ${data.seniorName}'),
+            //     style: ElevatedButton.styleFrom(
+            //       backgroundColor: Colors.white,
+            //       foregroundColor: AppColors.dangerRed,
+            //     ),
+            //   ),
+            //   const SizedBox(height: 8),
+            //   // OutlinedButton.icon(
+            //   //   onPressed: () {
+            //   //     ScaffoldMessenger.of(context).showSnackBar(
+            //   //       const SnackBar(
+            //   //         content: Text('Notifications to others sent (Placeholder)'),
+            //   //       ),
+            //   //     );
+            //   //   },
+            //   //   icon: const Icon(Icons.notifications_active),
+            //   //   label: const Text('Notify Others'),
+            //   //   style: OutlinedButton.styleFrom(
+            //   //     foregroundColor: Colors.white,
+            //   //     side: const BorderSide(color: Colors.white),
+            //   //   ),
+            //   // ),
+            // ];
           }
           break;
       }
@@ -4059,8 +4414,8 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     List<WellnessDataPoint> data,
     bool isDarkMode,
   ) {
-    // Require minimum 5 data points for meaningful chart
-    const int minDataPoints = 5;
+    // Require minimum 3 data points for meaningful chart
+    const int minDataPoints = 3;
     
     if (data.isEmpty) {
       return _buildHealthPlaceholderCard(
@@ -4083,14 +4438,28 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     // Calculate spots
     // Data is assumed descending (recent first). Reverse for graph (old -> new)
     final sorted = List<WellnessDataPoint>.from(data.reversed);
-    final spots = <FlSpot>[];
-    for (int i = 0; i < sorted.length; i++) {
-      spots.add(FlSpot(i.toDouble(), sorted[i].wellnessIndex));
+    
+    // Limit to last 14 data points for better readability
+    final displayData = sorted.length > 14 ? sorted.sublist(sorted.length - 14) : sorted;
+    
+    final wellnessSpots = <FlSpot>[];
+    final moodSpots = <FlSpot>[];
+    final sleepSpots = <FlSpot>[];
+    final energySpots = <FlSpot>[];
+    
+    for (int i = 0; i < displayData.length; i++) {
+      final point = displayData[i];
+      wellnessSpots.add(FlSpot(i.toDouble(), point.wellnessIndex));
+      if (point.mood != null) moodSpots.add(FlSpot(i.toDouble(), point.mood!));
+      if (point.sleep != null) sleepSpots.add(FlSpot(i.toDouble(), point.sleep!));
+      if (point.energy != null) energySpots.add(FlSpot(i.toDouble(), point.energy!));
     }
+    
+    // Calculate date interval for X-axis labels (show every 2-4 labels depending on data count)
+    final int labelInterval = displayData.length <= 7 ? 1 : (displayData.length <= 10 ? 2 : 3);
 
     return Container(
-      height: 300,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isDarkMode ? AppColors.surfaceDark : Colors.white,
         borderRadius: BorderRadius.circular(24),
@@ -4101,42 +4470,108 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Wellness Index',
-            style: GoogleFonts.inter(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: isDarkMode ? Colors.white : Colors.black87,
-            ),
+          // Header
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Wellness Trends',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: isDarkMode ? Colors.white : Colors.black87,
+                ),
+              ),
+              // Data count badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryBlue.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '${data.length} check-ins',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: AppColors.primaryBlue,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 24),
-          Expanded(
+          const SizedBox(height: 8),
+          
+          // Legend
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            children: [
+              _buildLegendItem('Wellness', AppColors.primaryBlue, isDarkMode),
+              _buildLegendItem('Mood', AppColors.successGreen, isDarkMode),
+              _buildLegendItem('Sleep', Colors.purple, isDarkMode),
+              _buildLegendItem('Energy', AppColors.warningOrange, isDarkMode),
+            ],
+          ),
+          const SizedBox(height: 16),
+          
+          // Chart
+          SizedBox(
+            height: 220,
             child: LineChart(
               LineChartData(
-                gridData: FlGridData(show: false),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  horizontalInterval: 0.25,
+                  getDrawingHorizontalLine: (value) => FlLine(
+                    color: isDarkMode 
+                        ? AppColors.borderDark.withValues(alpha: 0.5) 
+                        : Colors.grey.withValues(alpha: 0.2),
+                    strokeWidth: 1,
+                  ),
+                ),
                 titlesData: FlTitlesData(
                   leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 32,
+                      interval: 0.25,
+                      getTitlesWidget: (val, meta) {
+                        if (val == 0 || val == 0.25 || val == 0.5 || val == 0.75 || val == 1.0) {
+                          return Text(
+                            '${(val * 100).toInt()}%',
+                            style: GoogleFonts.inter(
+                              fontSize: 10,
+                              color: isDarkMode ? AppColors.textSecondaryDark : Colors.grey,
+                            ),
+                          );
+                        }
+                        return const SizedBox();
+                      },
+                    ),
+                  ),
+                  topTitles: const AxisTitles(
                     sideTitles: SideTitles(showTitles: false),
                   ),
-                  topTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  rightTitles: AxisTitles(
+                  rightTitles: const AxisTitles(
                     sideTitles: SideTitles(showTitles: false),
                   ),
                   bottomTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
+                      reservedSize: 28,
                       getTitlesWidget: (val, meta) {
                         int index = val.toInt();
-                        if (index >= 0 && index < sorted.length) {
+                        // Show label based on interval to avoid crowding
+                        if (index >= 0 && index < displayData.length && index % labelInterval == 0) {
                           return Padding(
                             padding: const EdgeInsets.only(top: 8),
                             child: Text(
-                              DateFormat('E').format(sorted[index].date)[0],
+                              DateFormat('M/d').format(displayData[index].date),
                               style: GoogleFonts.inter(
-                                fontSize: 12,
-                                color: Colors.grey,
+                                fontSize: 10,
+                                color: isDarkMode ? AppColors.textSecondaryDark : Colors.grey,
                               ),
                             ),
                           );
@@ -4148,28 +4583,146 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                 ),
                 borderData: FlBorderData(show: false),
                 minX: 0,
-                maxX: (sorted.length - 1).toDouble(),
+                maxX: (displayData.length - 1).toDouble(),
                 minY: 0,
-                maxY: 1.1,
+                maxY: 1.05,
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (spot) => isDarkMode 
+                        ? AppColors.surfaceDark.withValues(alpha: 0.9)
+                        : Colors.white.withValues(alpha: 0.9),
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots.map((spot) {
+                        String label;
+                        if (spot.barIndex == 0) {
+                          label = 'Wellness';
+                        } else if (spot.barIndex == 1) {
+                          label = 'Mood';
+                        } else if (spot.barIndex == 2) {
+                          label = 'Sleep';
+                        } else {
+                          label = 'Energy';
+                        }
+                        return LineTooltipItem(
+                          '$label: ${(spot.y * 100).toInt()}%',
+                          GoogleFonts.inter(
+                            fontSize: 12,
+                            color: spot.bar.color ?? Colors.white,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
                 lineBarsData: [
+                  // Wellness Index (main line - thicker)
                   LineChartBarData(
-                    spots: spots,
+                    spots: wellnessSpots,
                     isCurved: true,
                     color: AppColors.primaryBlue,
-                    barWidth: 4,
+                    barWidth: 3,
                     isStrokeCapRound: true,
-                    dotData: FlDotData(show: true),
+                    dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(
                       show: true,
-                      color: AppColors.primaryBlue.withValues(alpha: 0.2),
+                      color: AppColors.primaryBlue.withValues(alpha: 0.1),
                     ),
                   ),
+                  // Mood (green)
+                  if (moodSpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: moodSpots,
+                      isCurved: true,
+                      color: AppColors.successGreen,
+                      barWidth: 2,
+                      isStrokeCapRound: true,
+                      dotData: const FlDotData(show: false),
+                      dashArray: [5, 5],
+                    ),
+                  // Sleep (purple)
+                  if (sleepSpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: sleepSpots,
+                      isCurved: true,
+                      color: Colors.purple,
+                      barWidth: 2,
+                      isStrokeCapRound: true,
+                      dotData: const FlDotData(show: false),
+                      dashArray: [5, 5],
+                    ),
+                  // Energy (orange)
+                  if (energySpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: energySpots,
+                      isCurved: true,
+                      color: AppColors.warningOrange,
+                      barWidth: 2,
+                      isStrokeCapRound: true,
+                      dotData: const FlDotData(show: false),
+                      dashArray: [5, 5],
+                    ),
                 ],
               ),
             ),
           ),
+          
+          // Summary
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isDarkMode 
+                  ? AppColors.primaryBlue.withValues(alpha: 0.1)
+                  : AppColors.primaryBlue.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 16,
+                  color: AppColors.primaryBlue,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Wellness Index = Average of Mood, Sleep & Energy scores',
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
+    );
+  }
+  
+  Widget _buildLegendItem(String label, Color color, bool isDarkMode) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 3,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: GoogleFonts.inter(
+            fontSize: 11,
+            color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+          ),
+        ),
+      ],
     );
   }
 

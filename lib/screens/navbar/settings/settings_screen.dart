@@ -25,6 +25,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:arbaz_app/models/user_model.dart';
+import 'package:arbaz_app/services/theme_provider.dart';
 
 /// Model class for a family contact
 
@@ -197,6 +198,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const SizedBox(height: 18),
                     ],
 
+                    // Appearance Section (Dark Mode) - Both, moved above Identity
+                    _buildSectionHeader(
+                      isDarkMode,
+                      icon: Icons.palette_outlined,
+                      title: 'APPEARANCE',
+                    ),
+                    const SizedBox(height: 12),
+                    _buildAppearanceSection(isDarkMode),
+
+                    const SizedBox(height: 18),
+
                     // Identity Section - Both
                     _buildSectionHeader(
                       isDarkMode,
@@ -209,16 +221,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     const SizedBox(height: 18),
 
                     // Escalation Alarm Section - Senior only
-                    if (!widget.isFamilyView) ...[
-                      _buildSectionHeader(
-                        isDarkMode,
-                        icon: Icons.notifications_outlined,
-                        title: 'ESCALATION ALARM',
-                      ),
-                      const SizedBox(height: 12),
-                      _buildEscalationAlarm(isDarkMode),
-                      const SizedBox(height: 18),
-                    ],
+                    // if (!widget.isFamilyView) ...[
+                    //   _buildSectionHeader(
+                    //     isDarkMode,
+                    //     icon: Icons.notifications_outlined,
+                    //     title: 'ESCALATION ALARM',
+                    //   ),
+                    //   const SizedBox(height: 12),
+                    //   _buildEscalationAlarm(isDarkMode),
+                    //   const SizedBox(height: 18),
+                    // ],
 
                     // Family Circle Section - Both
                     _buildSectionHeader(
@@ -952,6 +964,167 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildAppearanceSection(bool isDarkMode) {
+    return Consumer<ThemeProvider>(
+      builder: (context, themeProvider, child) {
+        return Container(
+          decoration: BoxDecoration(
+            color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Row(
+              children: [
+                // Animated icon container
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: themeProvider.isDarkMode
+                        ? const Color(0xFF1E293B)
+                        : const Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    transitionBuilder: (child, animation) {
+                      return ScaleTransition(
+                        scale: animation,
+                        child: RotationTransition(
+                          turns: Tween(begin: 0.5, end: 1.0).animate(animation),
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: Icon(
+                      themeProvider.isDarkMode
+                          ? Icons.dark_mode_rounded
+                          : Icons.light_mode_rounded,
+                      key: ValueKey(themeProvider.isDarkMode),
+                      size: 22,
+                      color: themeProvider.isDarkMode
+                          ? const Color(0xFF94A3B8)
+                          : const Color(0xFFF59E0B),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Dark Mode',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: isDarkMode
+                              ? AppColors.textPrimaryDark
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 200),
+                        child: Text(
+                          themeProvider.isDarkMode
+                              ? 'Dark theme active'
+                              : 'Light theme active',
+                          key: ValueKey(themeProvider.isDarkMode),
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w400,
+                            color: isDarkMode
+                                ? AppColors.textSecondaryDark
+                                : AppColors.textSecondary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Animated custom toggle
+                GestureDetector(
+                  onTap: () {
+                    themeProvider.toggleTheme(!themeProvider.isDarkMode);
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                    width: 56,
+                    height: 32,
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      gradient: themeProvider.isDarkMode
+                          ? const LinearGradient(
+                              colors: [Color(0xFF1E40AF), Color(0xFF3B82F6)],
+                            )
+                          : const LinearGradient(
+                              colors: [Color(0xFFE5E7EB), Color(0xFFD1D5DB)],
+                            ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: themeProvider.isDarkMode
+                              ? const Color(0xFF3B82F6).withValues(alpha: 0.3)
+                              : Colors.black.withValues(alpha: 0.1),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: AnimatedAlign(
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeInOut,
+                      alignment: themeProvider.isDarkMode
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: Container(
+                        width: 26,
+                        height: 26,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.15),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 200),
+                            child: Icon(
+                              themeProvider.isDarkMode
+                                  ? Icons.nightlight_round
+                                  : Icons.wb_sunny_rounded,
+                              key: ValueKey(themeProvider.isDarkMode),
+                              size: 16,
+                              color: themeProvider.isDarkMode
+                                  ? const Color(0xFF1E40AF)
+                                  : const Color(0xFFF59E0B),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
