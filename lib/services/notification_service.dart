@@ -325,8 +325,8 @@ class NotificationService {
       
       // Build notification content
       final String title = missedCount == 1
-          ? "Check-in Reminder (Local)"
-          : "Multiple Missed Check-ins (Local)";
+          ? "Check-in Reminder"
+          : "Multiple Missed Check-ins";
       
       final String body = missedCount == 1
           ? "You haven't checked in yet today. Tap to let your family know you're okay!"
@@ -459,6 +459,7 @@ class NotificationService {
   Future<void> showFamilyMissedCheckInNotification({
     required int missedCount,
     required String seniorId,
+    required String seniorName,
   }) async {
     if (!_isInitialized) return;
     
@@ -480,10 +481,10 @@ class NotificationService {
     }
     
     // Build notification content - customize message for family
-    final String title = "Missed Check-in Alert (Local)";
+    final String title = "Missed Check-in Alert";
     final String body = missedCount == 1
-        ? "Your linked senior has missed a check-in. Please ensure they are okay."
-        : "Your linked senior has missed $missedCount check-ins. Please check on them immediately.";
+        ? "$seniorName has missed a check-in. Please ensure they are okay."
+        : "$seniorName has missed $missedCount check-ins. Please check on them immediately.";
     
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       _channelId,
@@ -551,7 +552,7 @@ class NotificationService {
     }
     
     // Build notification content
-    const String title = '🚨 SOS Alert! (Local)';
+    const String title = '🚨 SOS Alert!';
     final String body = '$seniorName needs help! Tap to respond.';
     
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(

@@ -204,11 +204,13 @@ class FcmService {
     } else if (type == 'family_missed_alert') {
       final int missedCount = int.tryParse(message.data['missedCount'] ?? '1') ?? 1;
       final String seniorId = message.data['seniorUserId'] ?? '';
+      final String seniorName = message.data['seniorName'] ?? 'Your family member';
       
       if (seniorId.isNotEmpty) {
         await NotificationService().showFamilyMissedCheckInNotification(
           missedCount: missedCount,
           seniorId: seniorId,
+          seniorName: seniorName,
         );
          // Record FCM notification time for deduplication
         await _recordFcmNotificationTime();

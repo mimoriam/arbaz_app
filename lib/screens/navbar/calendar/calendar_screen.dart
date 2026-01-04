@@ -345,67 +345,11 @@ class _CalendarScreenState extends State<CalendarScreen>
   }
 
   Widget _buildStreakCard(bool isDarkMode) {
-    // Calculate hybrid success rate: avg of daily (checkIns/scheduled) percentages
-    final today = DateTime.now();
-    final monthStart = DateTime(_currentMonth.year, _currentMonth.month, 1);
-    final monthEnd =
-        (_currentMonth.year == today.year && _currentMonth.month == today.month)
-        ? today
-        : DateTime(_currentMonth.year, _currentMonth.month + 1, 0);
-
-    // Determine the effective start for this month
-    DateTime effectiveStart = monthStart;
-    if (_userStartDate != null && _userStartDate!.isAfter(monthStart)) {
-      effectiveStart = _userStartDate!;
-    }
-
-    final effectiveStartDay =
-        effectiveStart.year == _currentMonth.year &&
-            effectiveStart.month == _currentMonth.month
-        ? effectiveStart.day
-        : 1;
-
     // Count total check-ins for display
     int totalCheckIns = 0;
     for (var records in _checkInsByDay.values) {
       totalCheckIns += records.length;
     }
-
-    // Calculate hybrid success rate: avg(min(checkIns, scheduled) / scheduled)
-    double totalCompletion = 0.0;
-
-    for (var entry in _checkInsByDay.entries) {
-      final day = entry.key;
-      if (day < effectiveStartDay) continue; // Skip days before user started
-      
-      final dayRecords = entry.value;
-      if (dayRecords.isEmpty) continue;
-      
-      // Get scheduled count from the first record of that day
-      // (all records on same day should have same scheduledCount)
-      final scheduledCount = dayRecords.first.scheduledCount;
-      final checkInCount = dayRecords.length;
-      
-      // Calculate daily completion: min(actual, scheduled) / scheduled
-      // Cap at 100% (extra check-ins don't boost score)
-      final dailyCompletion = scheduledCount > 0
-          ? (checkInCount.clamp(0, scheduledCount) / scheduledCount)
-          : 1.0;
-      
-      totalCompletion += dailyCompletion;
-    }
-
-    // Calculate days user should have checked in (from effective start to now/month end)
-    int daysToCount = 0;
-    if (!effectiveStart.isAfter(monthEnd)) {
-      daysToCount = monthEnd.difference(effectiveStart).inDays + 1;
-    }
-
-    // For days with no check-ins at all, they count as 0% completion
-    // Average = (sum of daily completions) / (total days expected)
-    final successRate = daysToCount > 0
-        ? ((totalCompletion / daysToCount) * 100).toInt().clamp(0, 100)
-        : 0;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -428,21 +372,8 @@ class _CalendarScreenState extends State<CalendarScreen>
           ),
         ],
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _buildStreakStat('✅', '$totalCheckIns', 'Check-ins'),
-          Container(
-            width: 1,
-            height: 28,
-            color: Colors.white.withValues(alpha: 0.3),
-          ),
-          _buildStreakStat(
-            '📊',
-            '$successRate%',
-            'Success Rate',
-          ),
-        ],
+      child: Center(
+        child: _buildStreakStat('✅', '$totalCheckIns', 'Check-ins'),
       ),
     );
   }
@@ -1112,32 +1043,33 @@ class _CalendarScreenState extends State<CalendarScreen>
                     : AppColors.textSecondary,
               ),
               const SizedBox(width: 4),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    DateFormat('h:mm a').format(record.timestamp),
-                    style: GoogleFonts.inter(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: isDarkMode
-                          ? AppColors.textPrimaryDark
-                          : AppColors.textPrimary,
-                    ),
-                  ),
-                  // Show which schedules were satisfied
-                  if (record.scheduledFor.isNotEmpty)
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      '✓ ${record.scheduledFor.join(', ')}',
+                      DateFormat('h:mm a').format(record.timestamp),
                       style: GoogleFonts.inter(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.successGreen,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: isDarkMode
+                            ? AppColors.textPrimaryDark
+                            : AppColors.textPrimary,
                       ),
                     ),
-                ],
+                    // Show which schedules were satisfied
+                    if (record.scheduledFor.isNotEmpty)
+                      Text(
+                        '✓ ${record.scheduledFor.join(', ')}',
+                        style: GoogleFonts.inter(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.successGreen,
+                        ),
+                      ),
+                  ],
+                ),
               ),
-              const Spacer(),
               // Mood if available
               if (record.mood != null)
                 Container(

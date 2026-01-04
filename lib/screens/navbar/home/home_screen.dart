@@ -2415,6 +2415,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           NotificationService().showFamilyMissedCheckInNotification(
             missedCount: currentMissed,
             seniorId: seniorId,
+            seniorName: srName,
           );
         }
         _previousMissedCheckInsToday = currentMissed;
@@ -2431,6 +2432,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           NotificationService().showFamilyMissedCheckInNotification(
             missedCount: 1, // At least 1 missed
             seniorId: seniorId,
+            seniorName: srName,
           );
         }
         _previousStatus = newStatus;
@@ -2579,75 +2581,6 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     } catch (e) {
       debugPrint('⚠️ Error reloading wellness data: $e');
     }
-  }
-
-  /// Calculates check-in success rate matching calendar view logic.
-  /// 
-  /// Uses hybrid approach:
-  /// - Groups check-ins by day
-  /// - Calculates daily completion as min(checkIns, scheduled) / scheduled
-  /// - Averages across all days from effective start to today
-  /// 
-  /// This ensures family home view shows the same success rate as calendar.
-  int _calculateCheckInSuccessRate() {
-    if (_weeklyWellnessData.isEmpty) return 0;
-    
-    final now = DateTime.now();
-    final monthStart = DateTime(_selectedMonth.year, _selectedMonth.month, 1);
-    final monthEnd = (_selectedMonth.year == now.year && _selectedMonth.month == now.month)
-        ? now
-        : DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0);
-    
-    // Group check-ins by day
-    final Map<int, List<WellnessDataPoint>> checkInsByDay = {};
-    for (final point in _weeklyWellnessData) {
-      if (point.date.year == _selectedMonth.year && 
-          point.date.month == _selectedMonth.month) {
-        final day = point.date.day;
-        checkInsByDay.putIfAbsent(day, () => []);
-        checkInsByDay[day]!.add(point);
-      }
-    }
-    
-    if (checkInsByDay.isEmpty) return 0;
-    
-    // Get scheduled count from senior state (default to 1)
-    final scheduledCount = _currentSeniorState?.checkInSchedules.length ?? 1;
-    
-    // Calculate hybrid success rate: avg of daily completions
-    double totalCompletion = 0.0;
-    int daysWithCheckIns = 0;
-    
-    for (final entry in checkInsByDay.entries) {
-      final day = entry.key;
-      final dayRecords = entry.value;
-      if (dayRecords.isEmpty) continue;
-      
-      // Only count days within the valid range
-      final dayDate = DateTime(_selectedMonth.year, _selectedMonth.month, day);
-      if (dayDate.isBefore(monthStart) || dayDate.isAfter(monthEnd)) continue;
-      
-      // Calculate daily completion: min(actual, scheduled) / scheduled
-      // Cap at 100% (extra check-ins don't boost score)
-      final checkInCount = dayRecords.length;
-      final dailyCompletion = scheduledCount > 0
-          ? (checkInCount.clamp(0, scheduledCount) / scheduledCount)
-          : 1.0;
-      
-      totalCompletion += dailyCompletion;
-      daysWithCheckIns++;
-    }
-    
-    // Calculate days since start of month (or senior start) to today
-    // For days with no check-ins at all, they count as 0% completion
-    int daysToCount = monthEnd.difference(monthStart).inDays + 1;
-    
-    // Average = (sum of daily completions) / (total days expected)
-    // Using daysWithCheckIns to match calendar behavior (only count days with activity)
-    if (daysWithCheckIns == 0) return 0;
-    
-    final successRate = ((totalCompletion / daysToCount) * 100).toInt().clamp(0, 100);
-    return successRate;
   }
 
   SeniorCheckInStatus _calculateSeniorStatus(
@@ -3532,9 +3465,6 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       );
     }
 
-    // Calculate success rate matching calendar view logic (check-in completion rate)
-    final successRate = _calculateCheckInSuccessRate();
-
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -3561,23 +3491,13 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           // Removed Live Tracking Card as it wasn't requested in update plan but kept structure mostly
           // Replaced with Medication Streak Card or similar/Just Quick Stats
 
-          // Quick Stats Row
-          Row(
-            children: [
-              Expanded(
-                child: _buildQuickStatCard(
-                  'Check-ins',
-                  _weeklyWellnessData.length.toString(), // Weekly count
-                  Icons.check_circle_outline,
-                  isDarkMode,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildSuccessRateCard(successRate, isDarkMode),
-              ),
-            ],
-          ),
+          // Quick Stats - Check-ins only (Success Rate removed)
+          // _buildQuickStatCard(
+          //   'Check-ins',
+          //   _weeklyWellnessData.length.toString(), // Weekly count
+          //   Icons.check_circle_outline,
+          //   isDarkMode,
+          // ),
           const SizedBox(height: 16),
 
           // AI Care Intelligence Card
@@ -3759,16 +3679,16 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             title = '🚨 SOS Alert from ${data.seniorName}!';
             subtitle = 'Emergency assistance requested';
             actions = [
-              ElevatedButton.icon(
-                onPressed: () => _launchURL('tel:'), // In real app use number
-                icon: const Icon(Icons.call),
-                label: Text('Call ${data.seniorName}'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: AppColors.dangerRed,
-                ),
-              ),
-              const SizedBox(height: 8),
+              // ElevatedButton.icon(
+              //   onPressed: () => _launchURL('tel:'), // In real app use number
+              //   icon: const Icon(Icons.call),
+              //   label: Text('Call ${data.seniorName}'),
+              //   style: ElevatedButton.styleFrom(
+              //     backgroundColor: Colors.white,
+              //     foregroundColor: AppColors.dangerRed,
+              //   ),
+              // ),
+              // const SizedBox(height: 8),
               ElevatedButton.icon(
                 onPressed: () => _resolveSOS(),
                 icon: const Icon(Icons.check_circle),
@@ -4067,16 +3987,16 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                     color: color,
                   ),
                 ),
-                TextSpan(
-                  text: ' / $total',
-                  style: GoogleFonts.inter(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                    color: isDarkMode
-                        ? AppColors.textSecondaryDark
-                        : AppColors.textSecondary,
-                  ),
-                ),
+                // TextSpan(
+                //   text: ' / $total',
+                //   style: GoogleFonts.inter(
+                //     fontSize: 16,
+                //     fontWeight: FontWeight.w500,
+                //     color: isDarkMode
+                //         ? AppColors.textSecondaryDark
+                //         : AppColors.textSecondary,
+                //   ),
+                // ),
               ],
             ),
           ),
@@ -4105,49 +4025,6 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                     : AppColors.textSecondary,
               ),
             ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSuccessRateCard(int successRate, bool isDarkMode) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDarkMode ? AppColors.backgroundDark : AppColors.inputFillLight,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
-        ),
-      ),
-      child: Column(
-        children: [
-          Icon(
-            Icons.trending_up_rounded,
-            color: AppColors.successGreen,
-            size: 28,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '$successRate%',
-            style: GoogleFonts.inter(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: isDarkMode
-                  ? AppColors.textPrimaryDark
-                  : AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'Success Rate',
-            style: GoogleFonts.inter(
-              fontSize: 11,
-              color: isDarkMode
-                  ? AppColors.textSecondaryDark
-                  : AppColors.textSecondary,
-            ),
-          ),
         ],
       ),
     );
