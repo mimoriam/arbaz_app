@@ -314,6 +314,35 @@ class FirestoreService {
     }
   }
 
+  /// Stream real-time updates to a user's profile
+  /// Used for profile photo sync across screens
+  Stream<UserProfile?> streamUserProfile(String uid) {
+    if (uid.isEmpty) return Stream.value(null);
+    
+    return _profileRef(uid)
+        .snapshots()
+        .map((doc) {
+          if (!doc.exists) return null;
+          try {
+            return UserProfile.fromFirestore(doc);
+          } catch (e) {
+            assert(() {
+              print('FirestoreService: Invalid profile data for user $uid: $e');
+              return true;
+            }());
+            return null;
+          }
+        })
+        .transform(
+          StreamTransformer<UserProfile?, UserProfile?>.fromHandlers(
+            handleError: (error, stackTrace, sink) {
+              // Emit null to subscribers for graceful degradation
+              sink.add(null);
+            },
+          ),
+        );
+  }
+
   /// Updates the lastLoginAt timestamp for an existing profile.
   Future<void> updateLastLogin(String uid) async {
     await _profileRef(uid).update({
@@ -1064,30 +1093,12 @@ class FirestoreService {
     final possibleId2 = '${contactUid}_$currentUid';
 
     // 2. Run transaction for both read and delete operations
+    // IMPORTANT: Firestore requires ALL reads before ANY writes
     await _db.runTransaction((transaction) async {
-      DocumentReference? connectionRefToDelete;
-
-      // Check existence of first possible ID
+      // --- PHASE 1: ALL READS ---
       final docRef1 = _connectionsRef.doc(possibleId1);
-      final docSnapshot1 = await transaction.get(docRef1);
-
-      if (docSnapshot1.exists) {
-        connectionRefToDelete = docRef1;
-      } else {
-        // If first doesn't exist, check the second
-        final docRef2 = _connectionsRef.doc(possibleId2);
-        final docSnapshot2 = await transaction.get(docRef2);
-        if (docSnapshot2.exists) {
-          connectionRefToDelete = docRef2;
-        }
-      }
-
-      // If a connection document was found, delete it
-      if (connectionRefToDelete != null) {
-        transaction.delete(connectionRefToDelete);
-      }
-
-      // Define contact refs
+      final docRef2 = _connectionsRef.doc(possibleId2);
+      
       final currentUserContactRef = _db
           .collection('users')
           .doc(currentUid)
@@ -1099,10 +1110,21 @@ class FirestoreService {
           .collection('familyContacts')
           .doc(currentUid);
 
-      // Check existence before deleting to prevent errors on non-existent docs
+      // Perform all reads upfront
+      final docSnapshot1 = await transaction.get(docRef1);
+      final docSnapshot2 = await transaction.get(docRef2);
       final currentContactDoc = await transaction.get(currentUserContactRef);
       final otherContactDoc = await transaction.get(otherUserContactRef);
 
+      // --- PHASE 2: ALL WRITES ---
+      // Delete connection document if found
+      if (docSnapshot1.exists) {
+        transaction.delete(docRef1);
+      } else if (docSnapshot2.exists) {
+        transaction.delete(docRef2);
+      }
+
+      // Delete contact entries if they exist
       if (currentContactDoc.exists) {
         transaction.delete(currentUserContactRef);
       }

@@ -18,12 +18,15 @@ import 'package:arbaz_app/providers/games_provider.dart';
 import 'package:arbaz_app/services/contacts_service.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/services/qr_invite_service.dart';
+import 'package:arbaz_app/services/storage_service.dart';
 import 'package:arbaz_app/models/family_contact_model.dart';
 import 'package:arbaz_app/services/auth_gate.dart';
 import 'package:arbaz_app/services/location_service.dart';
+import 'package:arbaz_app/common/profile_avatar.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:arbaz_app/models/user_model.dart';
 import 'package:arbaz_app/services/theme_provider.dart';
 
@@ -49,6 +52,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _timezone = 'Local'; // Default
   String? _locationAddress;
   bool _isLocationEnabled = false;
+  
+  // Profile Image
+  String? _profilePhotoUrl;
+  bool _isUploadingPhoto = false;
+  final StorageService _storageService = StorageService();
+  final ImagePicker _imagePicker = ImagePicker();
 
   @override
   void initState() {
@@ -92,6 +101,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.dispose();
   }
 
+  /// Shows a loading overlay dialog with a message
+  void _showLoadingDialog(String message) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false,
+        child: Dialog(
+          backgroundColor: isDarkMode ? AppColors.surfaceDark : Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 3,
+                    color: AppColors.primaryBlue,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.inter(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: isDarkMode ? Colors.white : Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Dismisses the loading dialog if it's showing
+  void _dismissLoadingDialog() {
+    if (mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  }
+
   /// Check location permission status without auto-requesting
   Future<void> _checkLocationPermission() async {
     if (!mounted) return;
@@ -115,7 +175,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    // Set timezone immediately - doesn't require Firestore
+    // Set timezone and initial photo URL from Google Sign-in
     if (mounted) {
       setState(() {
         _timezone = DateTime.now().timeZoneName;
@@ -126,6 +186,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // Fallback to email (first part) if no display name
           _userName = user.email!.split('@').first;
         }
+        // Use Google Sign-in photo as initial value if available
+        _profilePhotoUrl = _storageService.getInitialPhotoUrl(user);
       });
     }
 
@@ -139,10 +201,314 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _userName = profile.displayName!;
           }
           _locationAddress = profile.locationAddress;
+          // Prefer Firestore photoUrl, then Google Sign-in photo
+          if (profile.photoUrl != null && profile.photoUrl!.isNotEmpty) {
+            _profilePhotoUrl = profile.photoUrl;
+          }
         });
       }
     } catch (e) {
       debugPrint('Error loading user profile: $e');
+    }
+  }
+
+  /// Shows a bottom sheet to pick profile image from camera or gallery
+  void _showImagePickerSheet(bool isDarkMode) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 20),
+              decoration: BoxDecoration(
+                color: isDarkMode ? Colors.white24 : Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            
+            Text(
+              'Change Profile Photo',
+              style: GoogleFonts.inter(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: isDarkMode ? Colors.white : Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 24),
+            
+            // Camera option
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryBlue.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.camera_alt_outlined,
+                  color: AppColors.primaryBlue,
+                ),
+              ),
+              title: Text(
+                'Take Photo',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  color: isDarkMode ? Colors.white : Colors.black87,
+                ),
+              ),
+              subtitle: Text(
+                'Use your camera',
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  color: isDarkMode
+                      ? AppColors.textSecondaryDark
+                      : AppColors.textSecondary,
+                ),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                _pickAndUploadImage(ImageSource.camera);
+              },
+            ),
+            
+            const SizedBox(height: 8),
+            
+            // Gallery option
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.successGreen.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.photo_library_outlined,
+                  color: AppColors.successGreen,
+                ),
+              ),
+              title: Text(
+                'Choose from Gallery',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.w600,
+                  color: isDarkMode ? Colors.white : Colors.black87,
+                ),
+              ),
+              subtitle: Text(
+                'Select an existing photo',
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  color: isDarkMode
+                      ? AppColors.textSecondaryDark
+                      : AppColors.textSecondary,
+                ),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                _pickAndUploadImage(ImageSource.gallery);
+              },
+            ),
+            
+            // Remove photo option (only show if there's a custom photo)
+            if (_profilePhotoUrl != null) ...[
+              const SizedBox(height: 8),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.dangerRed.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.delete_outline,
+                    color: AppColors.dangerRed,
+                  ),
+                ),
+                title: Text(
+                  'Remove Photo',
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.dangerRed,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _removeProfileImage();
+                },
+              ),
+            ],
+            
+            SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Picks an image from the specified source and uploads it
+  Future<void> _pickAndUploadImage(ImageSource source) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    // Capture service reference before async gap to avoid context.read after await
+    final firestoreService = context.read<FirestoreService>();
+
+    try {
+      // Pick image with compression settings
+      final XFile? image = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 80, // 80% quality for good balance
+      );
+      
+      if (image == null) return; // User cancelled
+      
+      // Show loading state
+      if (mounted) {
+        setState(() => _isUploadingPhoto = true);
+      }
+      
+      // Upload to Firebase Storage
+      final downloadUrl = await _storageService.uploadProfileImageFromXFile(
+        user.uid,
+        image,
+      );
+      
+      if (downloadUrl != null) {
+        // Update Firestore profile with new photo URL
+        await firestoreService.updateUserProfile(user.uid, {
+          'photoUrl': downloadUrl,
+        });
+        
+        if (mounted) {
+          setState(() {
+            _profilePhotoUrl = downloadUrl;
+            _isUploadingPhoto = false;
+          });
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Profile photo updated!',
+                style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+              ),
+              backgroundColor: AppColors.successGreen,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          );
+        }
+      } else {
+        // Upload failed
+        if (mounted) {
+          setState(() => _isUploadingPhoto = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Failed to upload photo. Please try again.',
+                style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+              ),
+              backgroundColor: AppColors.dangerRed,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error picking/uploading image: $e');
+      if (mounted) {
+        setState(() => _isUploadingPhoto = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'An error occurred. Please try again.',
+              style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+            ),
+            backgroundColor: AppColors.dangerRed,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  /// Removes the profile image and falls back to Google photo or initials
+  Future<void> _removeProfileImage() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    // Capture service reference before async gap to avoid context.read after await
+    final firestoreService = context.read<FirestoreService>();
+
+    try {
+      setState(() => _isUploadingPhoto = true);
+      
+      // Delete from Storage
+      await _storageService.deleteProfileImage(user.uid);
+      
+      // Clear from Firestore
+      await firestoreService.updateUserProfile(user.uid, {
+        'photoUrl': null,
+      });
+      
+      if (mounted) {
+        setState(() {
+          // Fall back to Google photo if available
+          _profilePhotoUrl = _storageService.getInitialPhotoUrl(user);
+          _isUploadingPhoto = false;
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Profile photo removed',
+              style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+            ),
+            backgroundColor: AppColors.textSecondary,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error removing profile image: $e');
+      if (mounted) {
+        setState(() => _isUploadingPhoto = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to remove photo. Please try again.',
+              style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+            ),
+            backgroundColor: AppColors.dangerRed,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -777,31 +1143,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       child: Column(
         children: [
-          // Name
+          // Profile Photo & Name
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             child: Row(
               children: [
-                CircleAvatar(
-                  radius: 18,
-                  backgroundColor: AppColors.primaryBlue.withValues(alpha: 0.1),
-                  child: Text(
-                    _userName.isNotEmpty ? _userName[0].toUpperCase() : 'U',
-                    style: GoogleFonts.inter(
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primaryBlue,
-                    ),
-                  ),
+                ProfileAvatar(
+                  photoUrl: _profilePhotoUrl,
+                  name: _userName,
+                  radius: 28,
+                  isDarkMode: isDarkMode,
+                  showEditBadge: true,
+                  isLoading: _isUploadingPhoto,
+                  onTap: () => _showImagePickerSheet(isDarkMode),
                 ),
-                const SizedBox(width: 12),
-                Text(
-                  _userName,
-                  style: GoogleFonts.inter(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: isDarkMode
-                        ? AppColors.textPrimaryDark
-                        : AppColors.textPrimary,
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _userName,
+                        style: GoogleFonts.inter(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: isDarkMode
+                              ? AppColors.textPrimaryDark
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Tap photo to change',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: isDarkMode
+                              ? AppColors.textSecondaryDark
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -1388,7 +1769,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final inviteCode = qrService.generateInviteQrData(
       user.uid,
-      'senior', // or 'family' depending on context
+      widget.isFamilyView ? 'family' : 'senior',
       name: bestName,
     );
 
@@ -1676,7 +2057,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             }
 
             final firestoreService = context.read<FirestoreService>();
+            
+            // Close the bottom sheet first
             Navigator.pop(context);
+            
+            // Show loading dialog while connecting
+            _showLoadingDialog('Connecting...');
             
             // Debug: Log what role the QR code contains
             debugPrint('📱 QR Payload: uid=${result.uid}, role=${result.role}, name=${result.name}');
@@ -1829,6 +2215,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }
             } catch (e) {
               debugPrint('Error adding family member via invite: $e');
+              _dismissLoadingDialog();
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
@@ -1847,11 +2234,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildContactEntry(bool isDarkMode, FamilyContactModel contact) {
     final firestoreService = context.read<FirestoreService>();
     
-    // If contactUid is available, use live profile lookup
-    // This fixes the "Family Member Family" bug by fetching fresh data
+    // If contactUid is available, use live profile stream for real-time updates
+    // This enables real-time photo sync when family members update their profiles
     if (contact.contactUid != null && contact.contactUid!.isNotEmpty) {
-      return FutureBuilder(
-        future: firestoreService.getUserProfile(contact.contactUid!),
+      return StreamBuilder<UserProfile?>(
+        stream: firestoreService.streamUserProfile(contact.contactUid!),
         builder: (context, snapshot) {
           // Determine display name: use live data if available, fall back to stored name
           String displayName = contact.name;
@@ -1877,6 +2264,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             displayName: displayName,
             displayPhone: displayPhone,
             isLoading: snapshot.connectionState == ConnectionState.waiting,
+            photoUrl: snapshot.data?.photoUrl,
           );
         },
       );
@@ -1899,6 +2287,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required String displayName,
     required String displayPhone,
     required bool isLoading,
+    String? photoUrl,
   }) {
     // FIX: Prevent redundant labels like "Family Member Family"
     bool shouldShowRelationship =
@@ -1911,22 +2300,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Row(
         children: [
-          CircleAvatar(
-            radius: 16,
+          ProfileAvatar(
+            photoUrl: photoUrl,
+            name: displayName, // Use displayed name for initials
+            radius: 20,
+            isDarkMode: isDarkMode,
+            isLoading: isLoading,
             backgroundColor: AppColors.primaryBlue.withValues(alpha: 0.1),
-            child: isLoading
-                ? const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Text(
-                    displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
-                    style: GoogleFonts.inter(
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primaryBlue,
-                    ),
-                  ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -2009,6 +2389,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (confirmed != true) return;
                   if (!context.mounted) return;
 
+                  // Show loading dialog
+                  _showLoadingDialog('Removing contact...');
+
                   try {
                     // Use bidirectional delete with contactUid if available, otherwise use contact.id
                     final targetUid = contact.contactUid ?? contact.id;
@@ -2018,6 +2401,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       targetUid,
                     );
 
+                    _dismissLoadingDialog();
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
@@ -2028,6 +2412,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     }
                   } catch (e) {
                     debugPrint('Error removing contact: $e');
+                    _dismissLoadingDialog();
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(

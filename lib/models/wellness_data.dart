@@ -118,6 +118,7 @@ class SeniorStatusData {
 class SeniorInfo {
   final String id;
   final String name;
+  final String? photoUrl;
 
-  SeniorInfo({required this.id, required this.name});
+  SeniorInfo({required this.id, required this.name, this.photoUrl});
 }

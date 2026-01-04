@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/models/activity_log.dart';
 import 'package:arbaz_app/models/user_model.dart';
+import 'package:arbaz_app/common/profile_avatar.dart';
 import 'package:intl/intl.dart';
 
 /// Model for family member display in dashboard
@@ -18,6 +19,7 @@ class FamilyMemberData {
   final String? location;
   final DateTime? lastCheckIn;
   final bool isVacationMode;
+  final String? photoUrl;
 
   const FamilyMemberData({
     required this.id,
@@ -27,6 +29,7 @@ class FamilyMemberData {
     this.location,
     this.lastCheckIn,
     this.isVacationMode = false,
+    this.photoUrl,
   });
 
   /// Calculate "last seen" string from lastCheckIn
@@ -284,6 +287,7 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
       location: profile?.locationAddress,
       lastCheckIn: seniorState?.lastCheckIn,
       isVacationMode: seniorState?.vacationMode ?? false,
+      photoUrl: profile?.photoUrl,
     );
 
     setState(() {
@@ -726,26 +730,11 @@ class _FamilyDashboardScreenState extends State<FamilyDashboardScreen>
           // Avatar with status indicator
           Stack(
             children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isDarkMode
-                      ? AppColors.backgroundDark
-                      : AppColors.inputFillLight,
-                  border: Border.all(
-                    color: statusColor.withValues(alpha: 0.3),
-                    width: 2,
-                  ),
-                ),
-                child: Icon(
-                  Icons.person,
-                  color: isDarkMode
-                      ? AppColors.textSecondaryDark
-                      : AppColors.textSecondary,
-                  size: 28,
-                ),
+              ProfileAvatar(
+                photoUrl: member.photoUrl,
+                name: member.name,
+                radius: 28,
+                isDarkMode: isDarkMode,
               ),
               Positioned(
                 right: 0,

@@ -29,6 +29,7 @@ import 'package:arbaz_app/models/security_vault.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'package:arbaz_app/models/user_model.dart';
+import 'package:arbaz_app/common/profile_avatar.dart';
 
 /// Represents the different status states for the senior user
 enum SafetyStatus {
@@ -63,11 +64,15 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
 
   // User info
   String _userName = '';
+  String? _photoUrl;
   String? _lastCheckInLocation;
   String? _todayQuote;
   
   // Real-time stream subscription for senior state updates
   StreamSubscription<SeniorState?>? _seniorStateSubscription;
+  
+  // Real-time stream subscription for profile updates (photo sync)
+  StreamSubscription<UserProfile?>? _profileSubscription;
   
   // Timer to trigger status update when nextExpectedCheckIn is reached
   Timer? _checkInDeadlineTimer;
@@ -154,27 +159,34 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
         setState(() => _userName = nameFromAuth!);
       }
 
-      // Load Profile - needed for location and for email/password users' custom displayName
-      final profile = await firestoreService.getUserProfile(user.uid);
-      if (mounted) {
-        // For email/password users who set displayName in Firestore, use that instead
-        if (profile?.displayName != null && 
-            profile!.displayName!.isNotEmpty &&
-            (nameFromAuth == null || nameFromAuth.isEmpty || 
-             // If auth name is just email prefix, prefer Firestore displayName
-             (user.displayName == null || user.displayName!.isEmpty))) {
-          setState(() {
-            _userName = profile.displayName!.split(' ').first;
-          });
-        }
-        
-        // Populate last check-in location from profile
-        if (profile?.locationAddress != null) {
-          setState(() {
-            _lastCheckInLocation = profile!.locationAddress;
-          });
-        }
-      }
+      // Subscribe to profile for real-time photo and name updates
+      _profileSubscription?.cancel();
+      _profileSubscription = firestoreService.streamUserProfile(user.uid).listen(
+        (profile) {
+          if (!mounted) return;
+          if (profile != null) {
+            setState(() {
+              // Update photo URL for real-time sync
+              _photoUrl = profile.photoUrl;
+              
+              // For email/password users who set displayName in Firestore, use that
+              if (profile.displayName != null && 
+                  profile.displayName!.isNotEmpty &&
+                  (user.displayName == null || user.displayName!.isEmpty)) {
+                _userName = profile.displayName!.split(' ').first;
+              }
+              
+              // Populate last check-in location from profile
+              if (profile.locationAddress != null) {
+                _lastCheckInLocation = profile.locationAddress;
+              }
+            });
+          }
+        },
+        onError: (e) {
+          debugPrint('Error streaming profile: $e');
+        },
+      );
 
       // Subscribe to Senior State for real-time check-in status updates
       // This ensures the UI updates when nextExpectedCheckIn changes (e.g., from Settings)
@@ -479,6 +491,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   void dispose() {
     _checkInDeadlineTimer?.cancel();
     _seniorStateSubscription?.cancel();
+    _profileSubscription?.cancel();
     _pulseController.dispose();
     super.dispose();
   }
@@ -991,35 +1004,14 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           Row(
             children: [
               // User Avatar
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: AppColors.primaryBlue.withValues(alpha: 0.3),
-                    width: 2,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primaryBlue.withValues(alpha: 0.1),
-                      blurRadius: 10,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: CircleAvatar(
-                  backgroundColor: isDarkMode
-                      ? AppColors.surfaceDark
-                      : AppColors.inputFillLight,
-                  child: Icon(
-                    Icons.person_outline,
-                    color: isDarkMode
-                        ? AppColors.textSecondaryDark
-                        : AppColors.textSecondary,
-                    size: 26,
-                  ),
-                ),
+              ProfileAvatar(
+                photoUrl: _photoUrl,
+                name: _userName,
+                radius: 26, // 52 width / 2
+                isDarkMode: isDarkMode,
+                borderColor: AppColors.primaryBlue.withValues(alpha: 0.3),
+                borderWidth: 2,
+                showEditBadge: false,
               ),
               const SizedBox(width: 16),
 
@@ -1119,6 +1111,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                     );
                     if (mounted) {
                       setState(() => _activeAction = HomeAction.none);
+                      // Profile changes are handled by stream subscription - no reload needed
                     }
                   }
                 },
@@ -1982,7 +1975,9 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   StreamSubscription? _seniorStateSubscription;
   StreamSubscription? _connectionsSubscription; // Listen for new connections
   StreamSubscription? _checkInsSubscription; // Listen for new check-ins (real-time wellness)
+  StreamSubscription<UserProfile?>? _ownProfileSubscription; // Listen for own profile changes (photo sync)
   String _familyName = ''; // Empty until loaded
+  String? _photoUrl;
   bool _isLoadingFamilyProfile = true; // Loading state for profile
   
   // Multi-senior support
@@ -2024,7 +2019,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     _loadSeniorData();
-    _loadFamilyProfile();
+    _subscribeToOwnProfile();
     _listenToConnectionChanges(); // Start listening for connection changes
   }
   
@@ -2046,45 +2041,50 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     });
   }
 
-  Future<void> _loadFamilyProfile() async {
+  /// Subscribe to own profile for real-time photo and name updates
+  void _subscribeToOwnProfile() {
     final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      // OPTIMIZATION: Try to get name from Auth first (no Firestore read needed)
-      // This saves Firestore reads for Google/Apple sign-in users
-      String? nameFromAuth;
-      if (user.displayName != null && user.displayName!.isNotEmpty) {
-        nameFromAuth = user.displayName!.split(' ').first;
-      } else if (user.email != null && user.email!.isNotEmpty) {
-        nameFromAuth = user.email!.split('@').first;
-      }
+    if (user == null) {
+      if (mounted) setState(() => _isLoadingFamilyProfile = false);
+      return;
+    }
 
-      // Set name immediately from Auth if available
-      if (nameFromAuth != null && nameFromAuth.isNotEmpty && mounted) {
+    // OPTIMIZATION: Set initial values from Auth immediately
+    String? nameFromAuth;
+    if (user.displayName != null && user.displayName!.isNotEmpty) {
+      nameFromAuth = user.displayName!.split(' ').first;
+    } else if (user.email != null && user.email!.isNotEmpty) {
+      nameFromAuth = user.email!.split('@').first;
+    }
+
+    if (nameFromAuth != null && nameFromAuth.isNotEmpty && mounted) {
+      setState(() {
+        _familyName = nameFromAuth!;
+      });
+    }
+
+    // Subscribe to profile stream for real-time updates
+    final firestoreService = context.read<FirestoreService>();
+    _ownProfileSubscription?.cancel();
+    _ownProfileSubscription = firestoreService.streamUserProfile(user.uid).listen(
+      (profile) {
+        if (!mounted) return;
         setState(() {
-          _familyName = nameFromAuth!;
-          _isLoadingFamilyProfile = false;
-        });
-      }
-
-      try {
-        // Load profile for email/password users who set custom displayName in Firestore
-        final profile = await context.read<FirestoreService>().getUserProfile(
-          user.uid,
-        );
-        if (mounted) {
-          // For email/password users who set displayName in Firestore, use that instead
+          // Update photo URL for real-time sync
+          _photoUrl = profile?.photoUrl;
+          
+          // For email/password users who set displayName in Firestore, use that
           if (profile?.displayName != null &&
               profile!.displayName!.isNotEmpty &&
               (user.displayName == null || user.displayName!.isEmpty)) {
-            setState(() {
-              _familyName = profile.displayName!.split(' ').first;
-            });
+            _familyName = profile.displayName!.split(' ').first;
           }
-          setState(() => _isLoadingFamilyProfile = false);
-        }
-      } catch (e) {
-        debugPrint('Error loading family profile: $e');
-        // Name already set from Auth, just mark loading as complete
+          
+          _isLoadingFamilyProfile = false;
+        });
+      },
+      onError: (e) {
+        debugPrint('Error streaming own profile: $e');
         if (mounted) {
           setState(() {
             if (_familyName.isEmpty) {
@@ -2096,10 +2096,8 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             _isLoadingFamilyProfile = false;
           });
         }
-      }
-    } else {
-      if (mounted) setState(() => _isLoadingFamilyProfile = false);
-    }
+      },
+    );
   }
 
   @override
@@ -2107,6 +2105,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     _connectionsSubscription?.cancel();
     _seniorStateSubscription?.cancel();
     _checkInsSubscription?.cancel();
+    _ownProfileSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
   }
@@ -2184,7 +2183,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               conn.seniorName ??
               profile?.email.split('@').first ?? 
               'Senior';
-          allSeniors.add(SeniorInfo(id: conn.seniorId, name: name));
+          allSeniors.add(SeniorInfo(id: conn.seniorId, name: name, photoUrl: profile?.photoUrl));
         }
         debugPrint('Found ${allSeniors.length} confirmed seniors via getConnectionsForFamily');
       }
@@ -2208,7 +2207,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               profile?.email.split('@').first ?? 
               'Family Member';
           // Add as "senior" info for display purposes (we're viewing their data)
-          allSeniors.add(SeniorInfo(id: conn.familyId, name: name));
+          allSeniors.add(SeniorInfo(id: conn.familyId, name: name, photoUrl: profile?.photoUrl));
         }
         debugPrint('Found ${allSeniors.length} confirmed members via getConnectionsForSenior');
       }
@@ -2245,7 +2244,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               .catchError((_) => null);
           final name = profile?.displayName ?? 
               (contact.name.isNotEmpty ? contact.name : 'Senior');
-          allSeniors.add(SeniorInfo(id: contact.contactUid!, name: name));
+          allSeniors.add(SeniorInfo(id: contact.contactUid!, name: name, photoUrl: profile?.photoUrl));
         }
         
         // Also check for family contacts (for seniors viewing family view)
@@ -2271,7 +2270,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               .catchError((_) => null);
           final name = profile?.displayName ?? 
               (contact.name.isNotEmpty ? contact.name : 'Family Member');
-          allSeniors.add(SeniorInfo(id: contact.contactUid!, name: name));
+          allSeniors.add(SeniorInfo(id: contact.contactUid!, name: name, photoUrl: profile?.photoUrl));
         }
         
         if (allSeniors.isNotEmpty) {
@@ -2286,9 +2285,19 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       // Update state with all seniors
       setState(() {
         _allSeniors = allSeniors;
-        // If we have seniors but no selection, select the first one
-        if (allSeniors.isNotEmpty && _selectedSeniorId == null) {
+        
+        // Validate that selected senior still exists in the updated list
+        // This handles the case where a senior is deleted from settings
+        final selectedStillExists = allSeniors.any((s) => s.id == _selectedSeniorId);
+        
+        if (allSeniors.isNotEmpty && (_selectedSeniorId == null || !selectedStillExists)) {
+          // Select first available senior if no selection or current selection is invalid
           _selectedSeniorId = allSeniors.first.id;
+          debugPrint('🔄 Auto-selecting senior: ${allSeniors.first.name}');
+        } else if (allSeniors.isEmpty) {
+          // No seniors available, clear selection
+          _selectedSeniorId = null;
+          _seniorData = null;
         }
       });
 
@@ -2860,7 +2869,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               // Custom Header
               _buildHeader(isDarkMode),
 
-              const SizedBox(height: 16),
+              const SizedBox(height: 6),
 
               // Main Content Card with Tabs
               Expanded(
@@ -3027,30 +3036,16 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       child: Row(
         children: [
           // User Avatar
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: AppColors.successGreen.withValues(alpha: 0.3),
-                width: 2,
-              ),
-            ),
-            child: CircleAvatar(
-              backgroundColor: isDarkMode
-                  ? AppColors.surfaceDark
-                  : AppColors.inputFillLight,
-              child: Icon(
-                Icons.family_restroom,
-                color: isDarkMode
-                    ? AppColors.textSecondaryDark
-                    : AppColors.textSecondary,
-                size: 24,
-              ),
-            ),
+          ProfileAvatar(
+            photoUrl: _photoUrl,
+            name: _familyName,
+            radius: 24, // 48 width / 2
+            isDarkMode: isDarkMode,
+            borderColor: AppColors.successGreen.withValues(alpha: 0.3),
+            borderWidth: 2,
+            icon: Icons.family_restroom,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 6),
 
           // Greeting Text
           Expanded(
@@ -3067,7 +3062,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                               : AppColors.successGreen,
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 6),
                       Text(
                         'Loading...',
                         style: GoogleFonts.inter(
@@ -3158,6 +3153,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                 );
                 if (mounted) {
                   setState(() => _activeAction = HomeAction.none);
+                  // Profile changes are handled by stream subscription - no reload needed
                 }
               }
             },
@@ -3509,88 +3505,285 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
 
   /// Builds a dropdown to select which senior to view (when 2+ seniors connected)
   Widget _buildSeniorSelector(bool isDarkMode) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+    // Find current senior name
+    final currentSenior = _allSeniors.firstWhere(
+      (s) => s.id == _selectedSeniorId,
+      orElse: () => _allSeniors.first,
+    );
+    
+    return GestureDetector(
+      onTap: () => _showSeniorSelectorSheet(isDarkMode),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+          ),
+          boxShadow: isDarkMode ? null : [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
-        boxShadow: isDarkMode ? null : [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppColors.primaryBlue.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(
-              Icons.people_alt_outlined,
-              size: 20,
-              color: AppColors.primaryBlue,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Viewing',
-                  style: GoogleFonts.inter(
-                    fontSize: 12,
-                    color: isDarkMode 
-                        ? AppColors.textSecondaryDark 
-                        : AppColors.textSecondary,
-                  ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.primaryBlue.withValues(alpha: 0.15),
+                    AppColors.primaryBlue.withValues(alpha: 0.05),
+                  ],
                 ),
-                const SizedBox(height: 2),
-                DropdownButton<String>(
-                  value: _selectedSeniorId,
-                  isExpanded: true,
-                  underline: const SizedBox(),
-                  isDense: true,
-                  icon: Icon(
-                    Icons.keyboard_arrow_down,
-                    color: isDarkMode ? Colors.white70 : Colors.black54,
-                  ),
-                  style: GoogleFonts.inter(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: isDarkMode ? Colors.white : Colors.black87,
-                  ),
-                  dropdownColor: isDarkMode ? AppColors.surfaceDark : Colors.white,
-                  items: _allSeniors.map((senior) {
-                    return DropdownMenuItem<String>(
-                      value: senior.id,
-                      child: Text(
-                        senior.name,
-                        style: GoogleFonts.inter(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: isDarkMode ? Colors.white : Colors.black87,
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                  onChanged: _onSeniorChanged,
-                ),
-              ],
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.people_alt_outlined,
+                size: 22,
+                color: AppColors.primaryBlue,
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Viewing',
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: isDarkMode 
+                          ? AppColors.textSecondaryDark 
+                          : AppColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    currentSenior.name,
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: isDarkMode ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: isDarkMode 
+                    ? Colors.white.withValues(alpha: 0.1) 
+                    : AppColors.inputFillLight,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 20,
+                color: isDarkMode ? Colors.white70 : Colors.black54,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
+
+  /// Shows a pretty bottom sheet for selecting a senior
+  void _showSeniorSelectorSheet(bool isDarkMode) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.5,
+        ),
+        decoration: BoxDecoration(
+          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: isDarkMode ? Colors.white24 : Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          AppColors.successGreen.withValues(alpha: 0.2),
+                          AppColors.successGreen.withValues(alpha: 0.1),
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      Icons.family_restroom,
+                      size: 22,
+                      color: AppColors.successGreen,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Select Senior',
+                          style: GoogleFonts.inter(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: isDarkMode ? Colors.white : Colors.black87,
+                          ),
+                        ),
+                        Text(
+                          '${_allSeniors.length} family members connected',
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            color: isDarkMode 
+                                ? AppColors.textSecondaryDark 
+                                : AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            
+            Divider(
+              height: 1,
+              color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+            ),
+            
+            // Senior list
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: _allSeniors.length,
+                itemBuilder: (context, index) {
+                  final senior = _allSeniors[index];
+                  final isSelected = senior.id == _selectedSeniorId;
+                  
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
+                        Navigator.pop(context);
+                        if (senior.id != _selectedSeniorId) {
+                          _onSeniorChanged(senior.id);
+                        }
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24, 
+                          vertical: 14,
+                        ),
+                        decoration: isSelected ? BoxDecoration(
+                          color: AppColors.successGreen.withValues(alpha: 0.1),
+                        ) : null,
+                        child: Row(
+                          children: [
+                            // Avatar
+                            ProfileAvatar(
+                              photoUrl: senior.photoUrl,
+                              name: senior.name,
+                              radius: 22,
+                              isDarkMode: isDarkMode,
+                              gradientColors: isSelected 
+                                  ? [
+                                      AppColors.successGreen,
+                                      AppColors.successGreen.withValues(alpha: 0.8),
+                                    ]
+                                  : null,
+                            ),
+                            const SizedBox(width: 14),
+                            
+                            // Name & subtitle
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    senior.name,
+                                    style: GoogleFonts.inter(
+                                      fontSize: 16,
+                                      fontWeight: isSelected 
+                                          ? FontWeight.w700 
+                                          : FontWeight.w600,
+                                      color: isSelected
+                                          ? AppColors.successGreen
+                                          : (isDarkMode ? Colors.white : Colors.black87),
+                                    ),
+                                  ),
+                                  Text(
+                                    'Senior',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 13,
+                                      color: isDarkMode 
+                                          ? AppColors.textSecondaryDark 
+                                          : AppColors.textSecondary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            
+                            // Selected indicator
+                            if (isSelected)
+                              Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: AppColors.successGreen,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.check,
+                                  size: 16,
+                                  color: Colors.white,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            
+            // Bottom padding for safe area
+            SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
+          ],
+        ),
+      ),
+    );
+  }
+
 
   Widget _buildInviteCard(bool isDarkMode) {
     return Container(
