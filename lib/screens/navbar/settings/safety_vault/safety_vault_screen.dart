@@ -418,6 +418,10 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
   }
 
   Future<void> _showPetDialog(bool isDarkMode, PetInfo? existingPet, int? editIndex) async {
+    // Capture scaffold messenger BEFORE opening bottom sheet
+    // This ensures SnackBars appear above the sheet, not behind it
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    
     final nameController = TextEditingController(text: existingPet?.name ?? '');
     final typeController = TextEditingController(text: existingPet?.type ?? '');
     final medicationsController = TextEditingController(text: existingPet?.medications ?? '');
@@ -488,7 +492,7 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
                   child: ElevatedButton(
                     onPressed: () {
                       if (nameController.text.isEmpty || typeController.text.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        scaffoldMessenger.showSnackBar(
                           SnackBar(
                             content: Text('Pet name and type are required'),
                             backgroundColor: AppColors.dangerRed,

@@ -1976,6 +1976,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   StreamSubscription? _connectionsSubscription; // Listen for new connections
   StreamSubscription? _checkInsSubscription; // Listen for new check-ins (real-time wellness)
   StreamSubscription<UserProfile?>? _ownProfileSubscription; // Listen for own profile changes (photo sync)
+  StreamSubscription? _vaultSubscription; // Listen for security vault changes (real-time)
   String _familyName = ''; // Empty until loaded
   String? _photoUrl;
   bool _isLoadingFamilyProfile = true; // Loading state for profile
@@ -2106,6 +2107,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
     _seniorStateSubscription?.cancel();
     _checkInsSubscription?.cancel();
     _ownProfileSubscription?.cancel();
+    _vaultSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
   }
@@ -2508,14 +2510,18 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       debugPrint('⚠️ Error loading monthly wellness data: $e');
     }
 
-    // Load Security Vault data for this senior
-    SecurityVault? vaultData;
-    try {
-      vaultData = await firestoreService.getSecurityVaultForSenior(seniorId);
-      debugPrint('🔍 Vault data loaded: ${vaultData != null}');
-    } catch (e) {
-      debugPrint('⚠️ Error loading vault data: $e');
-    }
+    // Subscribe to Security Vault stream for real-time updates
+    // This ensures family view updates immediately when senior modifies their vault
+    _vaultSubscription?.cancel();
+    _vaultSubscription = firestoreService
+        .streamSecurityVault(seniorId)
+        .listen((vaultData) {
+          if (!mounted) return;
+          setState(() {
+            _vaultData = vaultData;
+          });
+          debugPrint('📦 Vault data updated via stream: ${vaultData != null}');
+        });
 
     if (mounted) {
       setState(() {
@@ -2533,12 +2539,11 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
         }
         _gameResults = gameResults;
         _cognitiveMetrics = CognitiveMetrics.fromResults(gameResults);
-        _vaultData = vaultData;
         _isLoadingSeniorData = false;
       });
     }
     
-    debugPrint('✅ Senior data loaded: $srName, games: ${gameResults.length}, vault: ${vaultData != null}');
+    debugPrint('✅ Senior data loaded: $srName, games: ${gameResults.length}');
   }
 
   /// Called when user switches to a different senior in the dropdown

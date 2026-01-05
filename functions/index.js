@@ -297,6 +297,59 @@ async function checkMissedCheckInLogged(userId, scheduleStr, date) {
 }
 
 /**
+ * Find all connected users for a given user ID
+ * Since users can swap roles (Senior <-> Family), we need to query both directions:
+ * - Where userId is the seniorId (notify familyId)
+ * - Where userId is the familyId (notify seniorId)
+ * @param {string} userId - User ID to find connections for
+ * @returns {Promise<Array<{userId: string, connectionId: string}>>} - List of connected user IDs
+ */
+async function getConnectedUsers(userId) {
+  // Query 1: Find connections where user is the senior
+  const asSeniorQuery = db.collection("connections")
+    .where("seniorId", "==", userId)
+    .where("status", "==", "active");
+  
+  // Query 2: Find connections where user is the family member  
+  const asFamilyQuery = db.collection("connections")
+    .where("familyId", "==", userId)
+    .where("status", "==", "active");
+  
+  const [asSeniorSnapshot, asFamilySnapshot] = await Promise.all([
+    asSeniorQuery.get(),
+    asFamilyQuery.get()
+  ]);
+  
+  const connectedUsers = [];
+  
+  // From "as senior" connections, notify the family members
+  asSeniorSnapshot.docs.forEach(doc => {
+    const data = doc.data();
+    connectedUsers.push({
+      userId: data.familyId,
+      connectionId: doc.id
+    });
+  });
+  
+  // From "as family" connections, notify the seniors
+  asFamilySnapshot.docs.forEach(doc => {
+    const data = doc.data();
+    connectedUsers.push({
+      userId: data.seniorId,
+      connectionId: doc.id
+    });
+  });
+  
+  // Deduplicate by userId (in case of duplicate connections)
+  const seen = new Set();
+  return connectedUsers.filter(cu => {
+    if (seen.has(cu.userId)) return false;
+    seen.add(cu.userId);
+    return true;
+  });
+}
+
+/**
  * Find the next future schedule time (for Cloud Task scheduling)
  * Unlike calculateNextExpectedCheckIn which returns earliest missed for UI,
  * this returns only schedules that are still in the future
@@ -937,47 +990,43 @@ exports.handleMissedCheckIn = onRequest({
         // 1. Notify the Senior
         await sendMissedCheckInNotification(userId, missedCount);
         
-        // 2. Notify Linked Family Members
-        // Use top-level connections collection (same pattern as onSOSTriggered)
-        // This ensures consistent lookup across all notification types
-        const connectionsSnapshot = await db.collection("connections")
-          .where("seniorId", "==", userId)
-          .where("status", "==", "active")
-          .get();
+        // 2. Notify Linked Family Members (BIDIRECTIONAL)
+        // Query connections where user is EITHER seniorId OR familyId
+        // This supports users who can swap between Senior and Family roles
+        const connectedUsers = await getConnectedUsers(userId);
         
-        logger.info(`Family notification: Found ${connectionsSnapshot.size} active connections for senior ${userId}`);
+        logger.info(`Family notification: Found ${connectedUsers.length} active connections for user ${userId}`);
           
-        if (!connectionsSnapshot.empty) {
-          const familyNotificationPromises = connectionsSnapshot.docs.map(async (doc) => {
-            const connectionData = doc.data();
-            const familyUserId = connectionData.familyId;
+        if (connectedUsers.length > 0) {
+          const familyNotificationPromises = connectedUsers.map(async (connection) => {
+            const connectedUserId = connection.userId;
             
-            logger.info(`Family notification: Processing family member ${familyUserId}`);
+            logger.info(`Family notification: Processing connected user ${connectedUserId}`);
             
-            // Get family user's FCM token from correct subcollection path
-            const familyProfileDoc = await db.collection("users")
-              .doc(familyUserId)
+            // Get connected user's FCM token from correct subcollection path
+            const connectedProfileDoc = await db.collection("users")
+              .doc(connectedUserId)
               .collection("data")
               .doc("profile")
               .get();
               
-            if (!familyProfileDoc.exists) {
-              logger.warn(`Family notification: Profile not found for family user ${familyUserId}`);
+            if (!connectedProfileDoc.exists) {
+              logger.warn(`Family notification: Profile not found for connected user ${connectedUserId}`);
               return null;
             }
             
-            const familyData = familyProfileDoc.data();
-            const familyFcmToken = familyData?.fcmToken;
+            const connectedData = connectedProfileDoc.data();
+            const connectedFcmToken = connectedData?.fcmToken;
             
-            logger.info(`Family notification: Family ${familyUserId} token status: ${familyFcmToken ? 'PRESENT' : 'MISSING'}`);
+            logger.info(`Family notification: Connected user ${connectedUserId} token status: ${connectedFcmToken ? 'PRESENT' : 'MISSING'}`);
             
-            if (familyFcmToken) {
+            if (connectedFcmToken) {
               try {
                 const result = await admin.messaging().send({
-                  token: familyFcmToken,
+                  token: connectedFcmToken,
                   notification: {
                     title: "Missed Check-in Alert (FCM)",
-                    body: "Your senior has missed a scheduled check-in. Please check on them.",
+                    body: "A connected senior has missed a scheduled check-in. Please check on them.",
                   },
                   data: {
                     type: "family_missed_alert",
@@ -1002,14 +1051,14 @@ exports.handleMissedCheckIn = onRequest({
                     },
                   },
                 });
-                logger.info(`Family notification: Successfully sent to ${familyUserId}, messageId: ${result}`);
+                logger.info(`Family notification: Successfully sent to ${connectedUserId}, messageId: ${result}`);
                 return result;
               } catch (sendError) {
-                logger.error(`Family notification: Failed to send to ${familyUserId}:`, { error: sendError.message, code: sendError.code });
+                logger.error(`Family notification: Failed to send to ${connectedUserId}:`, { error: sendError.message, code: sendError.code });
                 return null;
               }
             } else {
-               logger.warn(`No FCM token found for family user ${familyUserId}`);
+               logger.warn(`No FCM token found for connected user ${connectedUserId}`);
                return null;
             }
           });
@@ -1286,41 +1335,40 @@ exports.onSOSTriggered = onDocumentWritten({
       ? (profileDoc.data()?.displayName || "Your family member")
       : "Your family member";
     
-    // Find all family members connected to this senior
-    const connectionsSnapshot = await db.collection("connections")
-      .where("seniorId", "==", userId)
-      .where("status", "==", "active")
-      .get();
+    // Find all connected users (BIDIRECTIONAL)
+    // Query connections where user is EITHER seniorId OR familyId
+    // This supports users who can swap between Senior and Family roles
+    const connectedUsers = await getConnectedUsers(userId);
     
-    if (connectionsSnapshot.empty) {
+    if (connectedUsers.length === 0) {
       logger.info(`No active family connections for user ${userId}`);
       return;
     }
     
-    // Collect family member IDs
-    const familyIds = connectionsSnapshot.docs.map(doc => doc.data().familyId);
-    logger.info(`Found ${familyIds.length} family members to notify`);
+    // Collect connected user IDs
+    const connectedUserIds = connectedUsers.map(cu => cu.userId);
+    logger.info(`Found ${connectedUserIds.length} family members to notify`);
     
-    // Get FCM tokens for all family members
+    // Get FCM tokens for all connected users
     const tokens = [];
-    for (const familyId of familyIds) {
+    for (const connectedUserId of connectedUserIds) {
       try {
-        const familyProfileDoc = await db.collection("users").doc(familyId)
+        const connectedProfileDoc = await db.collection("users").doc(connectedUserId)
           .collection("data").doc("profile").get();
         
-        if (familyProfileDoc.exists) {
-          const fcmToken = familyProfileDoc.data()?.fcmToken;
+        if (connectedProfileDoc.exists) {
+          const fcmToken = connectedProfileDoc.data()?.fcmToken;
           if (fcmToken) {
             tokens.push(fcmToken);
           }
         }
       } catch (error) {
-        logger.warn(`Error fetching FCM token for family ${familyId}:`, { error: error.message });
+        logger.warn(`Error fetching FCM token for connected user ${connectedUserId}:`, { error: error.message });
       }
     }
     
     if (tokens.length === 0) {
-      logger.info(`No FCM tokens found for family members of user ${userId}`);
+      logger.info(`No FCM tokens found for connected users of ${userId}`);
       return;
     }
     

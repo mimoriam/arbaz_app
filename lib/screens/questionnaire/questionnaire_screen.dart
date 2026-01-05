@@ -1,4 +1,5 @@
 import 'package:arbaz_app/screens/navbar/home/home_screen.dart';
+import 'package:arbaz_app/services/fcm_service.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/services/role_preference_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -113,9 +114,17 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
       }
 
       // Save active role preference locally
-      await rolePreferenceService.setActiveRole(user.uid, role);
+    await rolePreferenceService.setActiveRole(user.uid, role);
+    
+    // Register FCM token immediately for push notifications
+    // This ensures notifications work right away for new users
+    try {
+      await FcmService().registerToken(user.uid);
+    } catch (fcmError) {
+      debugPrint('FCM registration failed (non-fatal): $fcmError');
+    }
 
-      if (!mounted) return;
+    if (!mounted) return;
 
       // Navigate to appropriate home screen
       Navigator.of(context).pushReplacement(

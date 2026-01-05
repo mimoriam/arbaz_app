@@ -867,6 +867,26 @@ class FirestoreService {
     return getSecurityVault(seniorUid);
   }
 
+  /// Stream security vault for real-time updates in family view
+  Stream<SecurityVault?> streamSecurityVault(String seniorUid) {
+    if (seniorUid.isEmpty) return Stream.value(null);
+    
+    return _securityVaultRef(seniorUid)
+        .snapshots()
+        .map((snap) {
+          if (!snap.exists) return null;
+          return SecurityVault.fromFirestore(snap);
+        })
+        .transform(
+          StreamTransformer<SecurityVault?, SecurityVault?>.fromHandlers(
+            handleError: (error, stackTrace, sink) {
+              // Log the error and emit null for graceful degradation
+              sink.add(null);
+            },
+          ),
+        );
+  }
+
   // ===== Activity Log Operations =====
 
   /// Log an activity for a senior
