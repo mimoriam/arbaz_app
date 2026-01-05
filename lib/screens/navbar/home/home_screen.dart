@@ -199,17 +199,26 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
             final lastCheckIn = seniorState.lastCheckIn;
             final now = DateTime.now();
             
+
             // Multi check-in tracking: get schedules and completed list from Firestore
             final schedules = seniorState.checkInSchedules;
             final completedToday = seniorState.completedSchedulesToday;
             
             // Day boundary check: reset completed if lastScheduleResetDate is from a previous day
+            // BUT: If lastCheckIn is today, trust Firestore data (avoid race condition where
+            // completedSchedulesToday arrives before lastScheduleResetDate is updated)
             List<String> effectiveCompleted = completedToday;
             final resetDate = seniorState.lastScheduleResetDate;
-            if (resetDate == null || 
+            final checkedInToday = lastCheckIn != null &&
+                lastCheckIn.year == now.year &&
+                lastCheckIn.month == now.month &&
+                lastCheckIn.day == now.day;
+            
+            // Only reset if both conditions fail: user hasn't checked in today AND reset date is stale
+            if (!checkedInToday && (resetDate == null || 
                 resetDate.year != now.year ||
                 resetDate.month != now.month ||
-                resetDate.day != now.day) {
+                resetDate.day != now.day)) {
               effectiveCompleted = [];
             }
             
@@ -221,13 +230,11 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
             );
             
             // Legacy: Check if at least one check-in was done today
-            final isToday = lastCheckIn != null &&
-                lastCheckIn.year == now.year &&
-                lastCheckIn.month == now.month &&
-                lastCheckIn.day == now.day;
+            final isToday = checkedInToday; // Reuse already computed value
             
             // Day 1 logic: skip "running late" ONLY for the default 11:00 AM schedule
             // If user adds custom schedules on Day 1, those SHOULD work normally
+
             final isDay1 = seniorState.seniorCreatedAt != null &&
                 seniorState.seniorCreatedAt!.year == now.year &&
                 seniorState.seniorCreatedAt!.month == now.month &&
