@@ -490,6 +490,31 @@ class FirestoreService {
     }, SetOptions(merge: true));
   }
 
+  /// Triggers an SOS alert with optional location data
+  /// Location fields are only set if provided (graceful degradation)
+  Future<void> triggerSOSWithLocation(
+    String uid, {
+    double? latitude,
+    double? longitude,
+    String? address,
+  }) async {
+    final Map<String, dynamic> data = {
+      'sosActive': true,
+      'sosTriggeredAt': Timestamp.now(),
+    };
+    
+    // Only add location fields if provided
+    if (latitude != null && longitude != null) {
+      data['sosLocationLatitude'] = latitude;
+      data['sosLocationLongitude'] = longitude;
+      if (address != null) {
+        data['sosLocationAddress'] = address;
+      }
+    }
+    
+    await _seniorStateRef(uid).set(data, SetOptions(merge: true));
+  }
+
   /// Resolves an SOS alert - sets sosActive to false
   /// Called by family member to acknowledge the alert
   Future<void> resolveSOS(String uid) async {

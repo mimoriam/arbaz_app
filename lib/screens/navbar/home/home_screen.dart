@@ -27,6 +27,7 @@ import 'package:arbaz_app/models/checkin_model.dart';
 import 'package:arbaz_app/models/game_result.dart';
 import 'package:arbaz_app/models/security_vault.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:arbaz_app/models/user_model.dart';
 import 'package:arbaz_app/common/profile_avatar.dart';
@@ -776,9 +777,50 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       return;
     }
 
+    // Capture services before async gaps
+    final firestoreService = context.read<FirestoreService>();
+    final locationService = LocationService();
+
     try {
-      // Persist SOS alert to Firestore - this triggers FCM notification via Cloud Function
-      await context.read<FirestoreService>().triggerSOS(user.uid);
+      // Try to get location, but don't block SOS if it fails
+      double? latitude;
+      double? longitude;
+      String? address;
+      
+      try {
+        // Use emergency accuracy for SOS - best available location
+        final locationResult = await locationService
+            .getCurrentLocationWithDetails(isEmergency: true)
+            .timeout(const Duration(seconds: 5));
+        
+        if (locationResult.isSuccess && locationResult.position != null) {
+          final position = locationResult.position!;
+          latitude = position.latitude;
+          longitude = position.longitude;
+          
+          // Try to get geocoded address
+          try {
+            address = await locationService
+                .getAddressFromPosition(position)
+                .timeout(const Duration(seconds: 3));
+          } catch (e) {
+            // Address geocoding failed, but we still have coordinates
+            debugPrint('SOS: Address geocoding failed: $e');
+          }
+        }
+      } catch (e) {
+        // Location failed (permission denied, timeout, etc.)
+        // Continue without location - SOS should never be blocked
+        debugPrint('SOS: Location unavailable: $e');
+      }
+      
+      // Persist SOS alert to Firestore with location if available
+      await firestoreService.triggerSOSWithLocation(
+        user.uid,
+        latitude: latitude,
+        longitude: longitude,
+        address: address,
+      );
       
       if (mounted) {
         setState(() {
@@ -2464,6 +2506,9 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             timeString: newTimeString,
             vacationMode: seniorState?.vacationMode ?? false,
             sosActive: seniorState?.sosActive ?? false,
+            sosLocationLatitude: seniorState?.sosLocationLatitude,
+            sosLocationLongitude: seniorState?.sosLocationLongitude,
+            sosLocationAddress: seniorState?.sosLocationAddress,
           );
         });
         
@@ -3983,6 +4028,53 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
               color: Colors.white.withValues(alpha: 0.9),
             ),
           ),
+          // SOS Location display (when available)
+          if (data.sosActive && (data.sosLocationAddress != null || 
+              (data.sosLocationLatitude != null && data.sosLocationLongitude != null)))
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: GestureDetector(
+                onTap: () {
+                  if (data.sosLocationLatitude != null && data.sosLocationLongitude != null) {
+                    _openLocationInMaps(data.sosLocationLatitude!, data.sosLocationLongitude!);
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(
+                        Icons.location_on,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          data.sosLocationAddress ?? 'View on map',
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.white,
+                            decoration: TextDecoration.underline,
+                            decorationColor: Colors.white70,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           if (actions.isNotEmpty) ...[const SizedBox(height: 24), ...actions],
         ],
       ),
@@ -3992,6 +4084,38 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   void _launchURL(String url) async {
     // Placeholder for url launcher
     debugPrint('Launching $url');
+  }
+
+  /// Opens the given coordinates in the device's maps app
+  void _openLocationInMaps(double latitude, double longitude) async {
+    // Try Google Maps first (works on both platforms if installed)
+    // Falls back to geo: URI which opens default maps app
+    final googleMapsUrl = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=$latitude,$longitude',
+    );
+    final geoUri = Uri.parse('geo:$latitude,$longitude?q=$latitude,$longitude');
+    
+    try {
+      // Try Google Maps URL first (more reliable across platforms)
+      if (await canLaunchUrl(googleMapsUrl)) {
+        await launchUrl(googleMapsUrl, mode: LaunchMode.externalApplication);
+      } else if (await canLaunchUrl(geoUri)) {
+        // Fall back to geo URI
+        await launchUrl(geoUri, mode: LaunchMode.externalApplication);
+      } else {
+        debugPrint('Could not launch maps for coordinates: $latitude, $longitude');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Could not open maps app'),
+              backgroundColor: AppColors.dangerRed,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error launching maps: $e');
+    }
   }
 
   /// Resolve SOS alert - marks the alert as handled

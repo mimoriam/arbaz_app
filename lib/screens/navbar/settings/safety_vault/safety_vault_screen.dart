@@ -418,10 +418,6 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
   }
 
   Future<void> _showPetDialog(bool isDarkMode, PetInfo? existingPet, int? editIndex) async {
-    // Capture scaffold messenger BEFORE opening bottom sheet
-    // This ensures SnackBars appear above the sheet, not behind it
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    
     final nameController = TextEditingController(text: existingPet?.name ?? '');
     final typeController = TextEditingController(text: existingPet?.type ?? '');
     final medicationsController = TextEditingController(text: existingPet?.medications ?? '');
@@ -437,110 +433,141 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        builder: (context) => Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
-            left: 20,
-            right: 20,
-            top: 20,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Handle bar
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
+        builder: (sheetContext) {
+          // Use StatefulBuilder for local state management of validation errors
+          String? nameError;
+          String? typeError;
+          
+          return StatefulBuilder(
+            builder: (context, setSheetState) {
+              return Padding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(context).viewInsets.bottom,
+                  left: 20,
+                  right: 20,
+                  top: 20,
                 ),
-                const SizedBox(height: 20),
-                
-                Text(
-                  editIndex != null ? 'Edit Pet' : 'Add Pet',
-                  style: GoogleFonts.inter(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                
-                _buildDialogTextField('Pet Name', nameController, isDarkMode),
-                const SizedBox(height: 12),
-                _buildDialogTextField('Pet Type (e.g., Dog, Cat)', typeController, isDarkMode),
-                const SizedBox(height: 12),
-                _buildDialogTextField('Medications & Schedule', medicationsController, isDarkMode),
-                const SizedBox(height: 12),
-                _buildDialogTextField('Vet Name & Phone', vetController, isDarkMode),
-                const SizedBox(height: 12),
-                _buildDialogTextField('Food Instructions', foodController, isDarkMode),
-                const SizedBox(height: 12),
-                _buildDialogTextField('Special Needs', specialNeedsController, isDarkMode),
-                const SizedBox(height: 24),
-                
-                // Save button
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      if (nameController.text.isEmpty || typeController.text.isEmpty) {
-                        scaffoldMessenger.showSnackBar(
-                          SnackBar(
-                            content: Text('Pet name and type are required'),
-                            backgroundColor: AppColors.dangerRed,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Handle bar
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+                            borderRadius: BorderRadius.circular(2),
                           ),
-                        );
-                        return;
-                      }
-                      
-                      final newPet = PetInfo(
-                        name: nameController.text,
-                        type: typeController.text,
-                        medications: medicationsController.text.isNotEmpty ? medicationsController.text : null,
-                        vetNamePhone: vetController.text.isNotEmpty ? vetController.text : null,
-                        foodInstructions: foodController.text.isNotEmpty ? foodController.text : null,
-                        specialNeeds: specialNeedsController.text.isNotEmpty ? specialNeedsController.text : null,
-                      );
-                      
-                      setState(() {
-                        if (editIndex != null) {
-                          _pets[editIndex] = newPet;
-                        } else {
-                          _pets.add(newPet);
-                        }
-                      });
-                      
-                      Navigator.pop(context);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.warningOrange,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
-                    ),
-                    child: Text(
-                      editIndex != null ? 'Update Pet' : 'Add Pet',
-                      style: GoogleFonts.inter(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
+                      const SizedBox(height: 20),
+                      
+                      Text(
+                        editIndex != null ? 'Edit Pet' : 'Add Pet',
+                        style: GoogleFonts.inter(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 20),
+                      
+                      // Pet Name with inline error
+                      _buildDialogTextField('Pet Name', nameController, isDarkMode, 
+                        errorText: nameError,
+                        onChanged: (_) {
+                          if (nameError != null) {
+                            setSheetState(() => nameError = null);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      
+                      // Pet Type with inline error
+                      _buildDialogTextField('Pet Type (e.g., Dog, Cat)', typeController, isDarkMode,
+                        errorText: typeError,
+                        onChanged: (_) {
+                          if (typeError != null) {
+                            setSheetState(() => typeError = null);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      _buildDialogTextField('Medications & Schedule', medicationsController, isDarkMode),
+                      const SizedBox(height: 12),
+                      _buildDialogTextField('Vet Name & Phone', vetController, isDarkMode),
+                      const SizedBox(height: 12),
+                      _buildDialogTextField('Food Instructions', foodController, isDarkMode),
+                      const SizedBox(height: 12),
+                      _buildDialogTextField('Special Needs', specialNeedsController, isDarkMode),
+                      const SizedBox(height: 24),
+                      
+                      // Save button
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            // Inline validation - show errors below fields, not in SnackBar
+                            bool hasError = false;
+                            
+                            if (nameController.text.isEmpty) {
+                              setSheetState(() => nameError = 'Pet name is required');
+                              hasError = true;
+                            }
+                            if (typeController.text.isEmpty) {
+                              setSheetState(() => typeError = 'Pet type is required');
+                              hasError = true;
+                            }
+                            
+                            if (hasError) return;
+                            
+                            final newPet = PetInfo(
+                              name: nameController.text,
+                              type: typeController.text,
+                              medications: medicationsController.text.isNotEmpty ? medicationsController.text : null,
+                              vetNamePhone: vetController.text.isNotEmpty ? vetController.text : null,
+                              foodInstructions: foodController.text.isNotEmpty ? foodController.text : null,
+                              specialNeeds: specialNeedsController.text.isNotEmpty ? specialNeedsController.text : null,
+                            );
+                            
+                            setState(() {
+                              if (editIndex != null) {
+                                _pets[editIndex] = newPet;
+                              } else {
+                                _pets.add(newPet);
+                              }
+                            });
+                            
+                            Navigator.pop(context);
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.warningOrange,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            editIndex != null ? 'Update Pet' : 'Add Pet',
+                            style: GoogleFonts.inter(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 20),
-              ],
-            ),
-          ),
-        ),
+              );
+            },
+          );
+        },
       );
     } finally {
       // Dispose controllers after the bottom sheet is closed
@@ -553,39 +580,67 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
     }
   }
 
-  Widget _buildDialogTextField(String hint, TextEditingController controller, bool isDarkMode) {
-    return TextField(
-      controller: controller,
-      style: GoogleFonts.inter(
-        fontSize: 15,
-        color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
-      ),
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: GoogleFonts.inter(
-          fontSize: 15,
-          color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
-        ),
-        filled: true,
-        fillColor: isDarkMode ? AppColors.backgroundDark : AppColors.backgroundLight,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(
-            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+  Widget _buildDialogTextField(
+    String hint, 
+    TextEditingController controller, 
+    bool isDarkMode, {
+    String? errorText,
+    ValueChanged<String>? onChanged,
+  }) {
+    final hasError = errorText != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: controller,
+          onChanged: onChanged,
+          style: GoogleFonts.inter(
+            fontSize: 15,
+            color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+          ),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: GoogleFonts.inter(
+              fontSize: 15,
+              color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+            ),
+            filled: true,
+            fillColor: isDarkMode ? AppColors.backgroundDark : AppColors.backgroundLight,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: hasError ? AppColors.dangerRed : (isDarkMode ? AppColors.borderDark : AppColors.borderLight),
+              ),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: hasError ? AppColors.dangerRed : (isDarkMode ? AppColors.borderDark : AppColors.borderLight),
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: hasError ? AppColors.dangerRed : AppColors.primaryBlue,
+              ),
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           ),
         ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(
-            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+        // Inline error message
+        if (hasError)
+          Padding(
+            padding: const EdgeInsets.only(top: 6, left: 4),
+            child: Text(
+              errorText,
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                color: AppColors.dangerRed,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.primaryBlue),
-        ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      ),
+      ],
     );
   }
 

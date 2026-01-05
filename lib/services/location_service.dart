@@ -107,6 +107,7 @@ class LocationService {
   }
 
   /// Gets the address from a Position
+  /// Prioritizes street-level details for emergency situations
   Future<String?> getAddressFromPosition(Position position) async {
     try {
       List<Placemark> placemarks = await placemarkFromCoordinates(
@@ -116,29 +117,45 @@ class LocationService {
 
       if (placemarks.isNotEmpty) {
         final place = placemarks.first;
-        // Construct a readable address (e.g., "City, State" or "Street, City")
+        // Construct a detailed address prioritizing street-level info
+        // Format: "Street, Sub-locality/Building, City" or fallback to less specific
         final List<String> parts = [];
 
+        // Add street name if available (most specific)
+        if (place.street != null && 
+            place.street!.isNotEmpty && 
+            place.street != place.name) {
+          parts.add(place.street!);
+        }
+        
+        // Add sub-locality (neighborhood/building area)
+        if (place.subLocality != null && place.subLocality!.isNotEmpty) {
+          parts.add(place.subLocality!);
+        }
+
+        // Add city
         if (place.locality != null && place.locality!.isNotEmpty) {
           parts.add(place.locality!);
         }
 
+        // If we have at least some info, return it
+        if (parts.isNotEmpty) {
+          return parts.join(', ');
+        }
+        
+        // Fallback: try administrative area and country
+        final List<String> fallbackParts = [];
         if (place.administrativeArea != null &&
             place.administrativeArea!.isNotEmpty) {
-          parts.add(place.administrativeArea!);
+          fallbackParts.add(place.administrativeArea!);
         }
-
-        // If we don't have city/state, try other fields
-        if (parts.isEmpty) {
-          if (place.subLocality != null && place.subLocality!.isNotEmpty) {
-            parts.add(place.subLocality!);
-          }
-          if (place.country != null && place.country!.isNotEmpty) {
-            parts.add(place.country!);
-          }
+        if (place.country != null && place.country!.isNotEmpty) {
+          fallbackParts.add(place.country!);
         }
-
-        return parts.join(', ');
+        
+        if (fallbackParts.isNotEmpty) {
+          return fallbackParts.join(', ');
+        }
       }
       return null;
     } catch (e) {

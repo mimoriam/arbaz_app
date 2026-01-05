@@ -103,6 +103,9 @@ class SeniorStatusData {
   final String? timeString; // Formatted time string, e.g. "22:13"
   final bool vacationMode;
   final bool sosActive; // True when SOS alert is active
+  final double? sosLocationLatitude; // Latitude when SOS was triggered
+  final double? sosLocationLongitude; // Longitude when SOS was triggered
+  final String? sosLocationAddress; // Geocoded address when SOS was triggered
 
   SeniorStatusData({
     required this.status,
@@ -111,6 +114,9 @@ class SeniorStatusData {
     this.timeString,
     this.vacationMode = false,
     this.sosActive = false,
+    this.sosLocationLatitude,
+    this.sosLocationLongitude,
+    this.sosLocationAddress,
   });
 }
 

@@ -46,12 +46,10 @@ class NotificationService {
   /// Notification IDs
   static const int missedCheckInNotificationId = 1001;
   
-  /// Cooldown period to prevent duplicate notifications (Timer + Firestore stream race)
-  static const Duration _notificationCooldown = Duration(minutes: 1);
+  /// Deduplication window - skip if same content shown within this time
+  static const Duration _deduplicationWindow = Duration(seconds: 30);
   /// SOS-specific cooldown period to prevent repeated SOS alerts
   static const Duration _sosCooldown = Duration(minutes: 1);
-  static const String _cooldownPrefKey = 'notification_last_shown_timestamp';
-  DateTime? _lastNotificationTime;
   
   /// Whether the service has been initialized
   bool get isInitialized => _isInitialized;
@@ -115,9 +113,6 @@ class NotificationService {
       _isInitialized = true;
       debugPrint('NotificationService initialized successfully');
       
-      // Load persisted cooldown timestamp
-      await _loadCooldownTimestamp();
-      
       // Check if app was launched from a notification
       return await getNotificationAppLaunchDetails();
       
@@ -177,30 +172,7 @@ class NotificationService {
     debugPrint('Android notification channel created: high_importance_channel');
   }
   
-  /// Loads the persisted cooldown timestamp from SharedPreferences.
-  Future<void> _loadCooldownTimestamp() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final timestamp = prefs.getInt(_cooldownPrefKey);
-      if (timestamp != null) {
-        _lastNotificationTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
-        debugPrint('NotificationService: Loaded cooldown timestamp from $_lastNotificationTime');
-      }
-    } catch (e) {
-      debugPrint('Error loading cooldown timestamp: $e');
-    }
-  }
-  
-  /// Saves the cooldown timestamp to SharedPreferences.
-  Future<void> _saveCooldownTimestamp() async {
-    try {
-      if (_lastNotificationTime == null) return;
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(_cooldownPrefKey, _lastNotificationTime!.millisecondsSinceEpoch);
-    } catch (e) {
-      debugPrint('Error saving cooldown timestamp: $e');
-    }
-  }
+
   
   /// Gets details about how the app was launched.
   /// Returns non-null if the app was launched by tapping a notification.
@@ -292,28 +264,26 @@ class NotificationService {
       return;
     }
     
-    // Prevent duplicate notifications within cooldown period
-    // Handles race condition where Timer and Firestore stream both try to show notification
-    final now = DateTime.now();
-    if (_lastNotificationTime != null) {
-      final timeSince = now.difference(_lastNotificationTime!);
-      if (timeSince < _notificationCooldown) {
-        debugPrint('NotificationService: Skipping duplicate notification (cooldown active, ${timeSince.inSeconds}s since last)');
+    // Content-based deduplication: skip if same missedCount shown recently
+    // This prevents duplicate notifications from Timer + Firestore stream race
+    // while allowing notifications for NEW events (different missedCount)
+    final prefs = await SharedPreferences.getInstance();
+    final lastCount = prefs.getInt('senior_missed_checkin_last_count');
+    final lastTime = prefs.getInt('senior_missed_checkin_last_time');
+    
+    if (lastCount != null && lastTime != null && lastCount == missedCount) {
+      final timeSince = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(lastTime));
+      if (timeSince < _deduplicationWindow) {
+        debugPrint('NotificationService: Skipping duplicate (same missedCount=$missedCount within ${timeSince.inSeconds}s)');
         return;
       }
     }
     
-    // Check if FCM notification was just received (deduplication with server push)
-    final prefs = await SharedPreferences.getInstance();
-    final fcmTimestamp = prefs.getInt('fcm_last_notification_timestamp');
-    if (fcmTimestamp != null) {
-      final fcmTime = DateTime.fromMillisecondsSinceEpoch(fcmTimestamp);
-      final timeSinceFcm = now.difference(fcmTime);
-      if (timeSinceFcm < const Duration(seconds: 5)) {
-        debugPrint('NotificationService: Skipping local notification - FCM just received ${timeSinceFcm.inSeconds}s ago');
-        return;
-      }
-    }
+    // ATOMICITY FIX: Write timestamp IMMEDIATELY after check, BEFORE showing notification.
+    // This minimizes the race window where a concurrent call could also pass the check.
+    // If showing fails, the next call after the dedup window will retry.
+    await prefs.setInt('senior_missed_checkin_last_count', missedCount);
+    await prefs.setInt('senior_missed_checkin_last_time', DateTime.now().millisecondsSinceEpoch);
     
     try {
       // Check if notifications are enabled on Android
@@ -376,9 +346,7 @@ class NotificationService {
       
       debugPrint('NotificationService: Showed missed check-in notification (count: $missedCount)');
       
-      // Update and persist cooldown timestamp
-      _lastNotificationTime = DateTime.now();
-      await _saveCooldownTimestamp();
+      // Timestamp already set above (atomicity fix)
       
     } catch (e, stackTrace) {
       debugPrint('Error showing notification: $e');
@@ -408,7 +376,7 @@ class NotificationService {
     }
   }
 
-  /// Checks if a generic cooldown is active for the given key (uses 30 second cooldown)
+  /// Checks if a generic cooldown is active for the given key (uses 30 second deduplication window)
   Future<bool> _isInCooldown(String key) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -416,7 +384,7 @@ class NotificationService {
       if (timestamp != null) {
          final lastTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
          final timeSince = DateTime.now().difference(lastTime);
-         return timeSince < _notificationCooldown;
+         return timeSince < _deduplicationWindow;
       }
       return false;
     } catch (e) {

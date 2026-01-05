@@ -220,6 +220,9 @@ class SeniorState {
   // SOS Alert tracking
   final bool sosActive; // True when SOS alert is active
   final DateTime? sosTriggeredAt; // When SOS was triggered (for cooldown)
+  final double? sosLocationLatitude; // Latitude when SOS was triggered
+  final double? sosLocationLongitude; // Longitude when SOS was triggered
+  final String? sosLocationAddress; // Geocoded address when SOS was triggered
 
   SeniorState({
     this.lastCheckIn,
@@ -242,6 +245,9 @@ class SeniorState {
     this.lastEscalationNotificationAt,
     this.sosActive = false,
     this.sosTriggeredAt,
+    this.sosLocationLatitude,
+    this.sosLocationLongitude,
+    this.sosLocationAddress,
   });
 
   factory SeniorState.fromFirestore(DocumentSnapshot doc) {
@@ -315,6 +321,9 @@ class SeniorState {
       sosTriggeredAt: data['sosTriggeredAt'] is Timestamp
           ? (data['sosTriggeredAt'] as Timestamp).toDate()
           : null,
+      sosLocationLatitude: (data['sosLocationLatitude'] as num?)?.toDouble(),
+      sosLocationLongitude: (data['sosLocationLongitude'] as num?)?.toDouble(),
+      sosLocationAddress: data['sosLocationAddress'] as String?,
     );
   }
 
@@ -342,6 +351,9 @@ class SeniorState {
       'lastEscalationNotificationAt': lastEscalationNotificationAt != null ? Timestamp.fromDate(lastEscalationNotificationAt!) : null,
       'sosActive': sosActive,
       'sosTriggeredAt': sosTriggeredAt != null ? Timestamp.fromDate(sosTriggeredAt!) : null,
+      'sosLocationLatitude': sosLocationLatitude,
+      'sosLocationLongitude': sosLocationLongitude,
+      'sosLocationAddress': sosLocationAddress,
     };
   }
 
@@ -366,6 +378,9 @@ class SeniorState {
     DateTime? lastEscalationNotificationAt,
     bool? sosActive,
     DateTime? sosTriggeredAt,
+    double? sosLocationLatitude,
+    double? sosLocationLongitude,
+    String? sosLocationAddress,
   }) {
     return SeniorState(
       lastCheckIn: lastCheckIn ?? this.lastCheckIn,
@@ -389,6 +404,9 @@ class SeniorState {
       lastEscalationNotificationAt: lastEscalationNotificationAt ?? this.lastEscalationNotificationAt,
       sosActive: sosActive ?? this.sosActive,
       sosTriggeredAt: sosTriggeredAt ?? this.sosTriggeredAt,
+      sosLocationLatitude: sosLocationLatitude ?? this.sosLocationLatitude,
+      sosLocationLongitude: sosLocationLongitude ?? this.sosLocationLongitude,
+      sosLocationAddress: sosLocationAddress ?? this.sosLocationAddress,
     );
   }
 }

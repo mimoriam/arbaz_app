@@ -1229,6 +1229,10 @@ exports.onCheckInRecorded = onDocumentWritten({
 
 /**
  * SCHEDULED: Reset daily counters at midnight
+ * 
+ * RACE CONDITION FIX: Only reset if lastScheduleResetDate is from a previous day.
+ * This prevents overwriting completedSchedulesToday if a user checks in between
+ * the query snapshot and the batch commit.
  */
 exports.resetDailyCounters = onRequest({
   region: "us-central1",
@@ -1240,8 +1244,12 @@ exports.resetDailyCounters = onRequest({
   logger.info("Starting daily counter reset");
 
   let resetCount = 0;
+  let skippedCount = 0;
   let batch = db.batch();
   let batchCount = 0;
+  
+  // Get today's date at midnight in the default timezone for comparison
+  const todayStart = DateTime.now().setZone(TIMEZONE).startOf("day");
 
   try {
     // Query top-level collection for seniors with missed check-ins
@@ -1251,6 +1259,22 @@ exports.resetDailyCounters = onRequest({
 
     for (const doc of snapshot.docs) {
       const userId = doc.id;
+      const data = doc.data();
+      
+      // RACE CONDITION GUARD: Only reset if lastScheduleResetDate is from a previous day.
+      // This prevents clearing completedSchedulesToday if the user checked in after
+      // the snapshot was taken but before this batch commits.
+      const lastResetDate = data.lastScheduleResetDate?.toDate?.();
+      if (lastResetDate) {
+        const lastResetLuxon = DateTime.fromJSDate(lastResetDate).setZone(TIMEZONE).startOf("day");
+        if (lastResetLuxon >= todayStart) {
+          // Already reset today (possibly by a concurrent call or recent check-in logic)
+          logger.info(`Skipping reset for ${userId} - already reset today`);
+          skippedCount++;
+          continue;
+        }
+      }
+      
       const seniorStateRef = db.collection("users").doc(userId)
         .collection("data").doc("seniorState");
       
@@ -1275,9 +1299,9 @@ exports.resetDailyCounters = onRequest({
     }
 
     const duration = Date.now() - startTime;
-    logger.info("Daily counter reset completed", { resetCount, durationMs: duration });
+    logger.info("Daily counter reset completed", { resetCount, skippedCount, durationMs: duration });
     
-    res.status(200).json({ resetCount, durationMs: duration });
+    res.status(200).json({ resetCount, skippedCount, durationMs: duration });
 
   } catch (error) {
     logger.error("Error in resetDailyCounters:", { error: error.message });
@@ -1372,12 +1396,23 @@ exports.onSOSTriggered = onDocumentWritten({
       return;
     }
     
+    // Get SOS location if available
+    const sosLatitude = afterData.sosLocationLatitude || null;
+    const sosLongitude = afterData.sosLocationLongitude || null;
+    const sosAddress = afterData.sosLocationAddress || null;
+    
+    // Build notification body with location if available
+    let notificationBody = `${seniorName} needs help! Tap to respond.`;
+    if (sosAddress) {
+      notificationBody = `${seniorName} needs help at ${sosAddress}. Tap to respond.`;
+    }
+    
     // Send FCM notification to all family members
     const message = {
       tokens,
       notification: {
         title: "🚨 SOS Alert! (FCM)",
-        body: `${seniorName} needs help! Tap to respond.`,
+        body: notificationBody,
       },
       data: {
         type: "sos_alert",
@@ -1385,6 +1420,10 @@ exports.onSOSTriggered = onDocumentWritten({
         seniorName,
         source: "server",
         timestamp: new Date().toISOString(),
+        // Include location data for client-side display
+        ...(sosLatitude && { sosLatitude: String(sosLatitude) }),
+        ...(sosLongitude && { sosLongitude: String(sosLongitude) }),
+        ...(sosAddress && { sosAddress }),
       },
       android: {
         priority: "high",
@@ -1401,7 +1440,7 @@ exports.onSOSTriggered = onDocumentWritten({
             badge: 1,
             alert: {
               title: "🚨 SOS Alert! (FCM)",
-              body: `${seniorName} needs help! Tap to respond.`,
+              body: notificationBody,
             },
           },
         },

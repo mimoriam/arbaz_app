@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -46,6 +48,9 @@ class FcmService {
   bool _isInitialized = false;
   String? _currentToken;
   
+  /// Subscription for token refresh listener (to cancel on logout)
+  StreamSubscription<String>? _tokenRefreshSubscription;
+  
   /// SharedPreferences key for last FCM notification time (deduplication)
   static const String _fcmLastNotificationKey = 'fcm_last_notification_timestamp';
   static const Duration _deduplicationWindow = Duration(seconds: 5);
@@ -89,28 +94,8 @@ class FcmService {
         await _updateTokenInFirestore(_userId!, _currentToken!);
       }
       
-      // Listen for token refresh - registered only once, uses _userId instance variable
-      // Added error handling to prevent silent token update failures
-      _messaging.onTokenRefresh.listen((newToken) async {
-        debugPrint('FCM Token refreshed: $newToken');
-        _currentToken = newToken;
-        if (_userId != null) {
-          try {
-            await _updateTokenInFirestore(_userId!, newToken);
-          } catch (e) {
-            debugPrint('FCM: Failed to update refreshed token: $e');
-            // Retry once after delay - if this fails, next app launch will fix it
-            Future.delayed(const Duration(seconds: 5), () async {
-              try {
-                await _updateTokenInFirestore(_userId!, newToken);
-                debugPrint('FCM: Token update retry succeeded');
-              } catch (retryError) {
-                debugPrint('FCM: Token update retry also failed: $retryError');
-              }
-            });
-          }
-        }
-      });
+      // Token refresh listener is set up in registerToken() per-user
+      // to ensure correct userId capture and proper cleanup on logout
       
       // Set up foreground message handler
       FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
@@ -143,7 +128,12 @@ class FcmService {
   /// Registers the FCM token for a user after login.
   /// Call this after user authentication to enable server-side push.
   /// Fetches token if not cached and saves to Firestore.
+  /// Sets up per-user token refresh listener to ensure correct userId binding.
   Future<void> registerToken(String userId) async {
+    // Cancel any existing token refresh listener (in case of user switch)
+    await _tokenRefreshSubscription?.cancel();
+    _tokenRefreshSubscription = null;
+    
     _userId = userId;
     
     // If we don't have a cached token, try to fetch it
@@ -163,6 +153,38 @@ class FcmService {
     } else {
       debugPrint('FCM registerToken: WARNING - No token available for user $userId');
     }
+    
+    // Set up token refresh listener with CAPTURED userId (not late-bound _userId)
+    // This ensures token refreshes are always saved to the correct user,
+    // even if _userId changes due to logout/login before the refresh fires.
+    final String capturedUserId = userId;
+    _tokenRefreshSubscription = _messaging.onTokenRefresh.listen((newToken) async {
+      debugPrint('FCM Token refreshed: $newToken');
+      _currentToken = newToken;
+      try {
+        await _updateTokenInFirestore(capturedUserId, newToken);
+      } catch (e) {
+        debugPrint('FCM: Failed to update refreshed token: $e');
+        // Retry once after delay - if this fails, next app launch will fix it
+        Future.delayed(const Duration(seconds: 5), () async {
+          try {
+            await _updateTokenInFirestore(capturedUserId, newToken);
+            debugPrint('FCM: Token update retry succeeded');
+          } catch (retryError) {
+            debugPrint('FCM: Token update retry also failed: $retryError');
+          }
+        });
+      }
+    });
+  }
+  
+  /// Unregisters FCM token listener on logout.
+  /// Call this when user logs out to prevent stale token updates.
+  Future<void> unregisterToken() async {
+    await _tokenRefreshSubscription?.cancel();
+    _tokenRefreshSubscription = null;
+    _userId = null;
+    debugPrint('FCM: Token listener unregistered');
   }
   
   /// Updates the FCM token in Firestore for server-side push.
@@ -198,9 +220,6 @@ class FcmService {
         missedCount: missedCount,
         isVacationMode: false, // Server already checked vacation mode
       );
-      
-      // Record FCM notification time for deduplication
-      await _recordFcmNotificationTime();
     } else if (type == 'family_missed_alert') {
       final int missedCount = int.tryParse(message.data['missedCount'] ?? '1') ?? 1;
       final String seniorId = message.data['seniorUserId'] ?? '';
@@ -212,8 +231,6 @@ class FcmService {
           seniorId: seniorId,
           seniorName: seniorName,
         );
-         // Record FCM notification time for deduplication
-        await _recordFcmNotificationTime();
       }
     } else if (type == 'sos_alert') {
       // Handle SOS alert for family members
@@ -225,8 +242,6 @@ class FcmService {
           seniorId: seniorId,
           seniorName: seniorName,
         );
-        // Record FCM notification time for deduplication
-        await _recordFcmNotificationTime();
       }
     }
   }
@@ -258,16 +273,7 @@ class FcmService {
       return false;
     }
   }
-  
-  /// Records the time of FCM notification for local notification deduplication.
-  Future<void> _recordFcmNotificationTime() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(_fcmLastNotificationKey, DateTime.now().millisecondsSinceEpoch);
-    } catch (e) {
-      debugPrint('Error recording FCM notification time: $e');
-    }
-  }
+
   
   /// Checks if FCM notification was recently shown (for local notification deduplication).
   Future<bool> wasFcmNotificationRecent() async {
