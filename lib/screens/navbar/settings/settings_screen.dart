@@ -2187,6 +2187,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 rethrow;
               }
 
+              // Dismiss loading dialog before showing success
+              _dismissLoadingDialog();
+              
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
