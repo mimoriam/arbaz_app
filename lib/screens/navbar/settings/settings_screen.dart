@@ -564,16 +564,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       const SizedBox(height: 18),
                     ],
 
-                    // Appearance Section (Dark Mode) - Both, moved above Identity
-                    _buildSectionHeader(
-                      isDarkMode,
-                      icon: Icons.palette_outlined,
-                      title: 'APPEARANCE',
-                    ),
-                    const SizedBox(height: 12),
-                    _buildAppearanceSection(isDarkMode),
+                    // // Appearance Section (Dark Mode) - Both, moved above Identity
+                    // _buildSectionHeader(
+                    //   isDarkMode,
+                    //   icon: Icons.palette_outlined,
+                    //   title: 'APPEARANCE',
+                    // ),
+                    // const SizedBox(height: 12),
+                    // _buildAppearanceSection(isDarkMode),
 
-                    const SizedBox(height: 18),
+                    // const SizedBox(height: 18),
 
                     // Identity Section - Both
                     _buildSectionHeader(

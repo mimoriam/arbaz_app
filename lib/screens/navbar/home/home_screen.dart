@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:arbaz_app/screens/navbar/calendar/calendar_screen.dart';
-import 'package:arbaz_app/screens/navbar/cognitive_games/cognitive_games_screen.dart';
 import 'package:arbaz_app/screens/navbar/home/senior_checkin_flow.dart';
+import 'package:arbaz_app/screens/navbar/home/senior_drawer.dart';
 import 'package:arbaz_app/screens/navbar/settings/settings_screen.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/services/notification_service.dart';
@@ -13,7 +13,7 @@ import 'package:flutter/services.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'package:arbaz_app/services/quotes_service.dart';
+
 import 'package:arbaz_app/services/location_service.dart';
 import 'package:arbaz_app/services/contacts_service.dart';
 import 'package:arbaz_app/models/family_contact_model.dart';
@@ -66,8 +66,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   // User info
   String _userName = '';
   String? _photoUrl;
-  String? _lastCheckInLocation;
-  String? _todayQuote;
+
   
   // Real-time stream subscription for senior state updates
   StreamSubscription<SeniorState?>? _seniorStateSubscription;
@@ -144,7 +143,6 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       final firestoreService = context.read<FirestoreService>();
-      final quotesService = context.read<DailyQuotesService>();
 
       // OPTIMIZATION: Try to get name from Auth first (no Firestore read needed)
       // This saves Firestore reads for Google/Apple sign-in users
@@ -177,10 +175,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 _userName = profile.displayName!.split(' ').first;
               }
               
-              // Populate last check-in location from profile
-              if (profile.locationAddress != null) {
-                _lastCheckInLocation = profile.locationAddress;
-              }
+
             });
           }
         },
@@ -328,10 +323,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       );
 
       // Cache daily quote
-      final quote = quotesService.getQuoteForToday(user.uid, DateTime.now());
-      if (mounted) {
-        setState(() => _todayQuote = quote);
-      }
+      // Daily quote service call removed as UI no longer displays it
     }
   }
 
@@ -883,37 +875,43 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
             backgroundColor: isDarkMode
                 ? AppColors.backgroundDark
                 : AppColors.backgroundLight,
+            drawer: SeniorDrawer(
+              userName: _userName,
+              photoUrl: _photoUrl,
+              isDarkMode: isDarkMode,
+              onSwitchToFamily: _switchToFamily,
+            ),
             body: SafeArea(
               child: Column(
                 children: [
                   // Header Section
                   _buildHeader(isDarkMode),
+                  isVacationMode ? SizedBox(height: 6): SizedBox(height: 16),
 
                   // Vacation Mode Card (if enabled)
                   if (isVacationMode) _buildVacationModeCard(isDarkMode),
+
+                  if (isVacationMode) SizedBox(height: 8),
 
                   // Main Content
                   Expanded(
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          SizedBox(height: screenHeight * 0.03),
+                          // New Greeting Section
+                          _buildGreetingSection(isDarkMode),
 
-                          // Large Status Circle Button
+                          SizedBox(height: screenHeight * 0.05),
+
+                          // Large Status Circle Button (Increased Size)
                           _buildStatusButton(
                             isVacationMode: isVacationMode,
                             isLoading:
                                 vacationProvider.isLoading ||
                                 _isLoadingCheckInStatus,
-                          ),
-
-                          SizedBox(height: screenHeight * 0.05),
-
-                          // Daily Health Message Section
-                          _buildHealthMessageSection(
-                            isDarkMode,
-                            isLoading: vacationProvider.isLoading || _isLoadingCheckInStatus,
+                            screenHeight: screenHeight,
                           ),
 
                           SizedBox(height: screenHeight * 0.05),
@@ -922,8 +920,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                     ),
                   ),
 
-                  // Emergency SOS Bar (Smart)
-                  _buildSmartEmergencyBar(),
+
                 ],
               ),
             ),
@@ -1046,197 +1043,180 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   }
 
   Widget _buildHeader(bool isDarkMode) {
+    // We need to check contacts to decide whether to show SOS or Invite in the header
+    final user = FirebaseAuth.instance.currentUser;
+    final hasUser = user != null;
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-      child: Column(
+      padding: const EdgeInsets.fromLTRB(0, 16, 0, 8), // 0 padding on sides for attached buttons
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              // User Avatar
-              ProfileAvatar(
-                photoUrl: _photoUrl,
-                name: _userName,
-                radius: 26, // 52 width / 2
-                isDarkMode: isDarkMode,
-                borderColor: AppColors.primaryBlue.withValues(alpha: 0.3),
-                borderWidth: 2,
-                showEditBadge: false,
-              ),
-              const SizedBox(width: 16),
-
-              // Greeting Text
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _userName.isNotEmpty ? 'Hi $_userName!' : 'Welcome!',
-                      style: GoogleFonts.inter(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        color: isDarkMode
-                            ? AppColors.textPrimaryDark
-                            : AppColors.textPrimary,
-                        letterSpacing: -0.5,
-                      ),
+          // Menu Button (Half-Pill attached to left)
+          Builder(
+            builder: (context) {
+              return GestureDetector(
+                onTap: () => Scaffold.of(context).openDrawer(),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryBlue,
+                    borderRadius: const BorderRadius.only(
+                      topRight: Radius.circular(30),
+                      bottomRight: Radius.circular(30),
                     ),
-                    Text(
-                      _getGreeting(),
-                      style: GoogleFonts.inter(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.primaryBlue,
-                        letterSpacing: 1.5,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primaryBlue.withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(2, 2),
                       ),
+                    ],
+                  ),
+                  child: Text(
+                    'Menu',
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ],
+              );
+            },
           ),
-          const SizedBox(height: 20),
 
-          // Quick Action Bar
-          Row(
-            children: [
-              _buildHeaderAction(
-                Icons.calendar_today_rounded,
-                'Calendar',
-                isDarkMode,
-                isLoading: _activeAction == HomeAction.calendar,
-                onTap: () async {
-                  setState(() => _activeAction = HomeAction.calendar);
-                  await Future.delayed(const Duration(milliseconds: 300));
-                  if (mounted) {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const CalendarScreen(),
+          // SOS / Invite Button (Half-Pill attached to right)
+          if (hasUser)
+            StreamBuilder<List<FamilyContactModel>>(
+              stream: context.read<FamilyContactsService>().getContacts(user.uid),
+              builder: (context, snapshot) {
+                final contacts = snapshot.data ?? [];
+                final hasContacts = contacts.isNotEmpty;
+
+                if (!hasContacts) {
+                  // Invite Button
+                  return GestureDetector(
+                    onTap: _onInviteFamily,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryBlue,
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(30),
+                          bottomLeft: Radius.circular(30),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primaryBlue.withValues(alpha: 0.3),
+                            blurRadius: 8,
+                            offset: const Offset(-2, 2),
+                          ),
+                        ],
                       ),
-                    );
-                    if (mounted) {
-                      setState(() => _activeAction = HomeAction.none);
-                    }
-                  }
-                },
-              ),
-              const SizedBox(width: 12),
-              _buildHeaderAction(
-                Icons.psychology_rounded,
-                'Brain Gym',
-                isDarkMode,
-                isLoading: _activeAction == HomeAction.brainGym,
-                onTap: () async {
-                  setState(() => _activeAction = HomeAction.brainGym);
-                  await Future.delayed(const Duration(milliseconds: 300));
-                  if (mounted) {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const CognitiveGamesScreen(),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.person_add, color: Colors.white, size: 20),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Invite',
+                            style: GoogleFonts.inter(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
                       ),
-                    );
-                    if (mounted) {
-                      setState(() => _activeAction = HomeAction.none);
-                    }
-                  }
-                },
-              ),
-              const SizedBox(width: 12),
-              _buildHeaderAction(
-                Icons.settings_rounded,
-                'Settings',
-                isDarkMode,
-                isLoading: _activeAction == HomeAction.settings,
-                onTap: () async {
-                  setState(() => _activeAction = HomeAction.settings);
-                  await Future.delayed(const Duration(milliseconds: 300));
-                  if (mounted) {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const SettingsScreen(),
+                    ),
+                  );
+                }
+
+                // SOS Button
+                return GestureDetector(
+                  onTap: _isSendingHelp ? null : _onEmergencyTap,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: _isSendingHelp ? Colors.grey : AppColors.dangerRed,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(30),
+                        bottomLeft: Radius.circular(30),
                       ),
-                    );
-                    if (mounted) {
-                      setState(() => _activeAction = HomeAction.none);
-                      // Profile changes are handled by stream subscription - no reload needed
-                    }
-                  }
-                },
-              ),
-              const SizedBox(width: 12),
-              _buildHeaderAction(
-                Icons.swap_horiz_rounded,
-                'Family View',
-                isDarkMode,
-                isLoading: _activeAction == HomeAction.roleSwitch,
-                onTap: _switchToFamily,
-              ),
-            ],
-          ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.dangerRed.withValues(alpha: 0.3),
+                          blurRadius: 8,
+                          offset: const Offset(-2, 2),
+                        ),
+                      ],
+                    ),
+                    child: _isSendingHelp
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.warning_rounded,
+                                  color: Colors.white, size: 24),
+                              const SizedBox(width: 8),
+                              Text(
+                                'SOS',
+                                style: GoogleFonts.inter(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );
   }
 
-  Widget _buildHeaderAction(
-    IconData icon,
-    String label,
-    bool isDarkMode, {
-    required VoidCallback onTap,
-    bool isLoading = false,
-  }) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            color: isDarkMode
-                ? AppColors.surfaceDark
-                : AppColors.primaryBlue.withValues(alpha: 0.05),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isDarkMode
-                  ? AppColors.borderDark
-                  : AppColors.primaryBlue.withValues(alpha: 0.1),
-            ),
-          ),
-          child: Center(
-            child: isLoading
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: isDarkMode
-                          ? Colors.white70
-                          : AppColors.primaryBlue,
-                    ),
-                  )
-                : Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(icon, size: 20, color: AppColors.primaryBlue),
-                      const SizedBox(height: 4),
-                      Text(
-                        label,
-                        style: GoogleFonts.inter(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: isDarkMode
-                              ? AppColors.textSecondaryDark
-                              : AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
+  Widget _buildGreetingSection(bool isDarkMode) {
+    return Column(
+      children: [
+        Text(
+          '${_getGreeting()}, ${_userName.toUpperCase()}',
+          textAlign: TextAlign.center,
+          style: GoogleFonts.inter(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: isDarkMode ? Colors.white54 : Colors.grey.shade600,
+            letterSpacing: 1.2,
           ),
         ),
-      ),
+        const SizedBox(height: 12),
+        Text(
+          'Are you okay today?',
+          textAlign: TextAlign.center,
+          style: GoogleFonts.inter(
+            fontSize: 28,
+            fontWeight: FontWeight.w800,
+            color: isDarkMode
+                ? AppColors.textPrimaryDark
+                : AppColors.textPrimary,
+            letterSpacing: -0.5,
+          ),
+        ),
+      ],
     );
   }
+
+
 
   Widget _buildVacationModeCard(bool isDarkMode) {
   return Container(
@@ -1314,6 +1294,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   Widget _buildStatusButton({
     bool isVacationMode = false,
     bool isLoading = false,
+    required double screenHeight,
   }) {
     // Determine the button state and colors based on check-in status
     // Green: Waiting for next schedule (not all past-due checked in)
@@ -1327,6 +1308,11 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     String statusText;
     String subtitleText;
     bool isClickable;
+
+    // Increased size logic
+    double buttonSize = screenHeight * 0.35; // Responsive size
+    if (buttonSize < 280) buttonSize = 280; // Min size
+    if (buttonSize > 340) buttonSize = 340; // Max size
 
     if (isVacationMode || isLoading) {
       // Disabled state
@@ -1365,10 +1351,10 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       isClickable = true;
     } else {
       // Green state - waiting for check-in (may be early)
-      primaryColor = const Color(0xFF2ECC71); // Vibrant green
-      secondaryColor = const Color(0xFF27AE60); // Darker green
-      ringColor = const Color(0xFF58D68D); // Light green ring
-      statusIcon = Icons.favorite;
+      primaryColor = const Color(0xFF14B8A6); // Teal/Emerald green (matching image vibe)
+      secondaryColor = const Color(0xFF0F766E); // Darker Teal
+      ringColor = const Color(0xFF5EEAD4); // Light Teal ring
+      statusIcon = Icons.check_rounded; // Checkmark matching image
       statusText = "I'M OK";
       // Show next check-in time if available
       if (_nextExpectedCheckIn != null) {
@@ -1394,8 +1380,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
         child: Opacity(
           opacity: (isVacationMode || isLoading) ? 0.5 : 1.0,
           child: Container(
-            width: 240,
-            height: 240,
+            width: buttonSize,
+            height: buttonSize,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               // Outer ring effect
@@ -1430,30 +1416,30 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Status Icon in white circle
-                  Container(
-                    width: 52,
-                    height: 52,
+                  // Status Icon in white circle removed? No, image has checkmark "I'M OK".
+                  // In code I used a white circle previously. 
+                  // Image shows checkmark is part of the "I'M OK" or above it.
+                  // I'll keep the white circle but make it blend or cleaner? 
+                  // Actually image has just a BIG checkmark above specific text.
+                  // I'll keep the white circle implementation for now but update icon to Check for green state.
+                  
+                  // Status Icon
+                   Container(
+                    width: buttonSize * 0.22,
+                    height: buttonSize * 0.22,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.white.withValues(alpha: 0.95),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
+                      color: Colors.white.withValues(alpha: 0.2), // Transparent white
                     ),
                     child: isLoading
                         ? Padding(
                             padding: const EdgeInsets.all(12),
                             child: CircularProgressIndicator(
                               strokeWidth: 3,
-                              color: primaryColor,
+                              color: Colors.white,
                             ),
                           )
-                        : Icon(statusIcon, color: primaryColor, size: 28),
+                        : Icon(statusIcon, color: Colors.white, size: buttonSize * 0.14),
                   ),
                   const SizedBox(height: 16),
 
@@ -1461,7 +1447,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                   Text(
                     statusText,
                     style: GoogleFonts.inter(
-                      fontSize: 26,
+                      fontSize: buttonSize * 0.12,
                       fontWeight: FontWeight.w900,
                       color: Colors.white,
                       letterSpacing: 1,
@@ -1476,7 +1462,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                       subtitleText,
                       textAlign: TextAlign.center,
                       style: GoogleFonts.inter(
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.w500,
                         color: Colors.white.withValues(alpha: 0.9),
                       ),
@@ -1491,142 +1477,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     );
   }
 
-  Widget _buildHealthMessageSection(bool isDarkMode, {bool isLoading = false}) {
-    // Determine message and state
-    String message;
-    Color dotColor;
-    String? subMessage;
 
-    if (_hasCheckedInToday) {
-      dotColor = AppColors.successGreen;
-      // Use cached daily quote
-      message = _todayQuote ?? "Have a wonderful day!";
-
-      if (_lastCheckInLocation != null) {
-        subMessage = "Checked in from $_lastCheckInLocation";
-      }
-    } else {
-      dotColor = AppColors.warningOrange;
-      message = isLoading ? "Syncing your status..." : "You haven't checked in yet today";
-      subMessage = isLoading ? null : "Please take a moment to let us know you're okay.";
-    }
-
-    // Show loading indicator when loading and not checked in
-    final showLoadingIndicator = isLoading && !_hasCheckedInToday;
-
-    return Column(
-      children: [
-        // Section Title
-        Text(
-          'DAILY HEALTH MESSAGE',
-          style: GoogleFonts.inter(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: isDarkMode
-                ? AppColors.textSecondaryDark
-                : AppColors.textSecondary,
-            letterSpacing: 1.5,
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // Message Card
-      Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-        decoration: BoxDecoration(
-          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
-          ),
-          boxShadow: isDarkMode
-              ? null
-              : [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-        ),
-        child: Column(
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Quote Icon, Status Dot, or Loading Indicator
-                if (showLoadingIndicator)
-                  Container(
-                    margin: const EdgeInsets.only(top: 2),
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppColors.warningOrange,
-                    ),
-                  )
-                else
-                  Container(
-                    margin: const EdgeInsets.only(top: 4),
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: dotColor,
-                      boxShadow: [
-                        BoxShadow(
-                          color: dotColor.withValues(alpha: 0.4),
-                          blurRadius: 6,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                  ),
-                const SizedBox(width: 14),
-
-                // Message Text
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        message,
-                        style: GoogleFonts.inter(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: isDarkMode
-                              ? AppColors.textPrimaryDark
-                              : AppColors.textPrimary,
-                          height: 1.4,
-                          fontStyle: _hasCheckedInToday
-                              ? FontStyle.italic
-                              : FontStyle.normal,
-                        ),
-                      ),
-                      if (subMessage != null) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          subMessage,
-                          style: GoogleFonts.inter(
-                            fontSize: 12,
-                            color: isDarkMode
-                                ? AppColors.textSecondaryDark
-                                : AppColors.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-      ],
-    );
-  }
 
   void _onInviteFamily() {
     // Show invite options
@@ -1828,180 +1679,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     );
   }
 
-  Widget _buildSmartEmergencyBar() {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return const SizedBox.shrink();
 
-    return StreamBuilder<List<FamilyContactModel>>(
-      stream: context.read<FamilyContactsService>().getContacts(user.uid),
-      builder: (context, snapshot) {
-        final contacts = snapshot.data ?? [];
-        final hasContacts = contacts.isNotEmpty;
-
-        // If no contacts, show "Invite Family" instead of SOS
-        if (!hasContacts) {
-          return GestureDetector(
-            onTap: _onInviteFamily,
-            child: Container(
-              margin: const EdgeInsets.all(16),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-              decoration: BoxDecoration(
-                color: AppColors.primaryBlue,
-                borderRadius: BorderRadius.circular(28),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.primaryBlue.withValues(alpha: 0.3),
-                    blurRadius: 16,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white.withValues(alpha: 0.2),
-                    ),
-                    child: const Icon(
-                      Icons.person_add,
-                      color: Colors.white,
-                      size: 24,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          'CONNECT FAMILY',
-                          style: GoogleFonts.inter(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                          ),
-                        ),
-                        Text(
-                          'Add contacts to enable SOS',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.white.withValues(alpha: 0.85),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Icon(
-                    Icons.arrow_forward_ios,
-                    color: Colors.white70,
-                    size: 16,
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-
-        // Standard SOS Bar
-        final Color barColor = _isSendingHelp
-            ? AppColors.dangerRed
-            : const Color(0xFFFF6B35); // Orange-red for emergency
-
-        return GestureDetector(
-          onTap: _isSendingHelp ? null : _onEmergencyTap,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 300),
-            margin: const EdgeInsets.all(16),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-            decoration: BoxDecoration(
-              color: barColor,
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: [
-                BoxShadow(
-                  color: barColor.withValues(alpha: 0.4),
-                  blurRadius: 16,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                // SOS Icon
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withValues(alpha: 0.2),
-                  ),
-                  child: _isSendingHelp
-                      ? const Padding(
-                          padding: EdgeInsets.all(10),
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2.5,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              Colors.white,
-                            ),
-                          ),
-                        )
-                      : const Icon(
-                          Icons.sos_outlined,
-                          color: Colors.white,
-                          size: 24,
-                        ),
-                ),
-                const SizedBox(width: 16),
-
-                // Text Content
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _isSendingHelp ? 'SENDING HELP...' : 'EMERGENCY SOS',
-                        style: GoogleFonts.inter(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        _isSendingHelp
-                            ? 'FAMILY WILL BE ALERTED NOW'
-                            : 'NOTIFY FAMILY IMMEDIATELY',
-                        style: GoogleFonts.inter(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.white.withValues(alpha: 0.85),
-                          letterSpacing: 0.3,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // Arrow indicator (only when not sending)
-                if (!_isSendingHelp)
-                  Icon(
-                    Icons.arrow_forward_ios,
-                    color: Colors.white.withValues(alpha: 0.7),
-                    size: 16,
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
 }
 
 // --- Family Home Screen with Tabs (Status, Health, Vault) ---

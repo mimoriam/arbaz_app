@@ -257,7 +257,8 @@ class MainApp extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           theme: SafeCheckTheme.lightTheme,
           darkTheme: SafeCheckTheme.darkTheme,
-          themeMode: themeProvider.themeMode,
+          // themeMode: themeProvider.themeMode,
+          themeMode: ThemeMode.light,
           home: const AuthGate(), // Single source of truth for routing
         );
       },
