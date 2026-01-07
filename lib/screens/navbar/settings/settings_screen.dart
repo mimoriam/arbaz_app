@@ -3,6 +3,7 @@ import 'package:arbaz_app/screens/navbar/family_dashboard/family_dashboard_scree
 import 'package:arbaz_app/screens/navbar/settings/safety_vault/safety_vault_screen.dart';
 import 'package:arbaz_app/services/role_preference_service.dart';
 import 'package:arbaz_app/services/vacation_mode_provider.dart';
+import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -29,6 +30,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:arbaz_app/models/user_model.dart';
 import 'package:arbaz_app/services/theme_provider.dart';
+import 'package:permission_handler/permission_handler.dart' hide ServiceStatus;
 
 /// Model class for a family contact
 
@@ -52,6 +54,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _timezone = 'Local'; // Default
   String? _locationAddress;
   bool _isLocationEnabled = false;
+  bool _isNotificationEnabled = false;
+  StreamSubscription<ServiceStatus>? _locationServiceStatusSubscription;
   
   // Profile Image
   String? _profilePhotoUrl;
@@ -69,8 +73,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         // Small delay to ensure OS permission state is fully updated
         await Future.delayed(const Duration(milliseconds: 300));
         _checkLocationPermission();
+        _checkNotificationPermission();
       },
     );
+
+    _locationServiceStatusSubscription =
+        Geolocator.getServiceStatusStream().listen((status) {
+      if (mounted) {
+        setState(() {
+          _isLocationEnabled = status == ServiceStatus.enabled;
+        });
+      }
+    });
 
     // Pre-populate identity from Auth to avoid flash of default values
     final user = FirebaseAuth.instance.currentUser;
@@ -92,11 +106,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context.read<EscalationAlarmProvider>().init();
       _loadUserProfile();
       _checkLocationPermission();
+      _checkNotificationPermission();
     });
   }
 
   @override
   void dispose() {
+    _locationServiceStatusSubscription?.cancel();
     _lifecycleListener.dispose();
     super.dispose();
   }
@@ -167,6 +183,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             isServiceEnabled &&
             (permission == LocationPermission.whileInUse ||
              permission == LocationPermission.always);
+      });
+    }
+  }
+
+  Future<void> _checkNotificationPermission() async {
+    final status = await Permission.notification.status;
+    if (mounted) {
+      setState(() {
+        _isNotificationEnabled = status.isGranted;
       });
     }
   }
@@ -534,6 +559,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
 
+                    // Crucial Settings - Both (Notifications & Location)
+                    _buildSectionHeader(
+                      isDarkMode,
+                      title: 'CRUCIAL SETTINGS',
+                      icon: Icons.verified_user_outlined,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildCrucialSettingsCard(isDarkMode),
+                    const SizedBox(height: 18),
+
                     // Vacation Mode Card - Senior only
                     if (!widget.isFamilyView) ...[
                       _buildVacationModeCard(isDarkMode),
@@ -829,15 +864,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     bool isDarkMode, {
     required IconData icon,
     required String title,
+    Color? textColor,
+    Color? iconColor,
   }) {
     return Row(
       children: [
         Icon(
           icon,
           size: 18,
-          color: isDarkMode
-              ? AppColors.textSecondaryDark
-              : AppColors.textSecondary,
+          color: iconColor ??
+              (isDarkMode
+                  ? AppColors.textSecondaryDark
+                  : AppColors.textSecondary),
         ),
         const SizedBox(width: 8),
         Text(
@@ -846,9 +884,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             fontSize: 12,
             fontWeight: FontWeight.w600,
             letterSpacing: 1.2,
-            color: isDarkMode
-                ? AppColors.textSecondaryDark
-                : AppColors.textSecondary,
+            color: textColor ??
+                (isDarkMode
+                    ? AppColors.textSecondaryDark
+                    : AppColors.textSecondary),
           ),
         ),
       ],
@@ -1124,6 +1163,194 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildCrucialSettingsCard(bool isDarkMode) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDarkMode
+              ? AppColors.primaryBlue.withValues(alpha: 0.3)
+              : AppColors.primaryBlue.withValues(alpha: 0.1),
+          width: 2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryBlue.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+
+
+          // Location permission toggle
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: (_isLocationEnabled
+                            ? AppColors.successGreen
+                            : AppColors.warningOrange)
+                        .withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    _isLocationEnabled ? Icons.location_on : Icons.location_off,
+                    size: 18,
+                    color: _isLocationEnabled
+                        ? AppColors.successGreen
+                        : AppColors.warningOrange,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Location Services',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: isDarkMode
+                              ? AppColors.textPrimaryDark
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        _isLocationEnabled ? 'Enabled' : 'Tap to enable',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: isDarkMode
+                              ? AppColors.textSecondaryDark
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (!_isLocationEnabled)
+                  GestureDetector(
+                    onTap: () async {
+                      await Geolocator.openLocationSettings();
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: isDarkMode
+                            ? Colors.white.withValues(alpha: 0.05)
+                            : Colors.grey[100],
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.chevron_right,
+                        size: 20,
+                        color: isDarkMode
+                            ? AppColors.textSecondaryDark
+                            : AppColors.textSecondary,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          // Divider
+          Divider(
+            height: 1,
+            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+          ),
+
+          // Notification Permission Toggle
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: (_isNotificationEnabled
+                            ? AppColors.successGreen
+                            : AppColors.warningOrange)
+                        .withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    _isNotificationEnabled
+                        ? Icons.notifications_active
+                        : Icons.notifications_off,
+                    size: 18,
+                    color: _isNotificationEnabled
+                        ? AppColors.successGreen
+                        : AppColors.warningOrange,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Notifications',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: isDarkMode
+                              ? AppColors.textPrimaryDark
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                      Text(
+                        _isNotificationEnabled ? 'Enabled' : 'Tap to enable',
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          color: isDarkMode
+                              ? AppColors.textSecondaryDark
+                              : AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (!_isNotificationEnabled)
+                  GestureDetector(
+                    onTap: () async {
+                      await openAppSettings();
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: isDarkMode
+                            ? Colors.white.withValues(alpha: 0.05)
+                            : Colors.grey[100],
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.chevron_right,
+                        size: 20,
+                        color: isDarkMode
+                            ? AppColors.textSecondaryDark
+                            : AppColors.textSecondary,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
   Widget _buildIdentitySection(bool isDarkMode) {
     return Container(
       decoration: BoxDecoration(
@@ -1221,7 +1448,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
             ),
 
-            // Location
+            // Location Address Display
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
               child: Row(
@@ -1252,89 +1479,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ],
-
-          // Divider
-          Divider(
-            height: 1,
-            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
-          ),
-
-          // Location Permission Toggle
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color:
-                        (_isLocationEnabled
-                                ? AppColors.successGreen
-                                : AppColors.warningOrange)
-                            .withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(
-                    _isLocationEnabled ? Icons.location_on : Icons.location_off,
-                    size: 18,
-                    color: _isLocationEnabled
-                        ? AppColors.successGreen
-                        : AppColors.warningOrange,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Location Services',
-                        style: GoogleFonts.inter(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                          color: isDarkMode
-                              ? AppColors.textPrimaryDark
-                              : AppColors.textPrimary,
-                        ),
-                      ),
-                      Text(
-                        _isLocationEnabled ? 'Enabled' : 'Tap to enable',
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          color: isDarkMode
-                              ? AppColors.textSecondaryDark
-                              : AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () async {
-                    // Opens system location settings
-                    // The onResume callback will refresh permission state when user returns
-                    await Geolocator.openLocationSettings();
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: isDarkMode
-                          ? Colors.white.withValues(alpha: 0.05)
-                          : Colors.grey[100],
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(
-                      Icons.chevron_right,
-                      size: 20,
-                      color: isDarkMode
-                          ? AppColors.textSecondaryDark
-                          : AppColors.textSecondary,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -3111,4 +3255,5 @@ class _AddFamilyMemberSheetState extends State<_AddFamilyMemberSheet> {
       if (mounted) setState(() => _isLoading = false);
     }
   }
+
 }

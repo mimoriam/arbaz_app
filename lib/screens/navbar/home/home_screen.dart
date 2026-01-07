@@ -772,6 +772,76 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     // Capture services before async gaps
     final firestoreService = context.read<FirestoreService>();
     final locationService = LocationService();
+    
+    // Check/Request Location Permissions & Service specifically for SOS
+    // This ensures we have the best chance of attaching location to the alert
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      LocationPermission permission = await Geolocator.checkPermission();
+
+      // If service disabled or permission denied, ask user ONE time
+      if (!serviceEnabled || permission == LocationPermission.denied) {
+        if (mounted) {
+          final shouldEnable = await showDialog<bool>(
+                context: context,
+                barrierDismissible: false,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Enable Location?'),
+                  content: const Text(
+                      'Location helps responders find you. Open settings to enable?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text(
+                        'Send Without',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Open Settings'),
+                    ),
+                  ],
+                ),
+              ) ??
+              false;
+
+          if (shouldEnable) {
+            bool opened = false;
+            if (!serviceEnabled) {
+              opened = await Geolocator.openLocationSettings();
+            } else {
+              opened = await Geolocator.openAppSettings();
+            }
+
+            if (opened) {
+              // Poll for up to 10 seconds for user to return/enable
+              int retries = 0;
+              while (retries < 10) {
+                await Future.delayed(const Duration(seconds: 1));
+                serviceEnabled = await Geolocator.isLocationServiceEnabled();
+                permission = await Geolocator.checkPermission();
+                
+                if (serviceEnabled && 
+                    (permission == LocationPermission.whileInUse || 
+                     permission == LocationPermission.always)) {
+                  break;
+                }
+                retries++;
+              }
+            }
+          }
+        }
+      }
+      
+      // Final permission request if just denied but not disabled
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+    } catch (e) {
+      debugPrint('Error checking location settings for SOS: $e');
+      // Fail safely - proceed to sending SOS even if this check errors
+    }
 
     try {
       // Try to get location, but don't block SOS if it fails
