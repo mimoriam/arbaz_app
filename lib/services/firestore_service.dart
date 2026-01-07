@@ -327,7 +327,6 @@ class FirestoreService {
             return UserProfile.fromFirestore(doc);
           } catch (e) {
             assert(() {
-              print('FirestoreService: Invalid profile data for user $uid: $e');
               return true;
             }());
             return null;

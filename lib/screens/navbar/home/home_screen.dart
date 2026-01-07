@@ -1137,17 +1137,17 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 return GestureDetector(
                   onTap: _isSendingHelp ? null : _onEmergencyTap,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                     decoration: BoxDecoration(
-                      color: _isSendingHelp ? Colors.grey : AppColors.dangerRed,
+                      color: _isSendingHelp ? Colors.grey : const Color(0xFFFF2B2B),
                       borderRadius: const BorderRadius.only(
                         topLeft: Radius.circular(30),
                         bottomLeft: Radius.circular(30),
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: AppColors.dangerRed.withValues(alpha: 0.3),
-                          blurRadius: 8,
+                          color: const Color(0xFFFF2B2B).withValues(alpha: 0.4),
+                          blurRadius: 10,
                           offset: const Offset(-2, 2),
                         ),
                       ],
@@ -1223,16 +1223,15 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
     padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
-      gradient: LinearGradient(
-        colors: [const Color(0xFF6366F1), const Color(0xFF818CF8)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      ),
+      color: isDarkMode ? AppColors.surfaceDark : Colors.white,
       borderRadius: BorderRadius.circular(16),
+      border: Border.all(
+        color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+      ),
       boxShadow: [
         BoxShadow(
-          color: const Color(0xFF6366F1).withValues(alpha: 0.3),
-          blurRadius: 12,
+          color: Colors.black.withValues(alpha: 0.05),
+          blurRadius: 10,
           offset: const Offset(0, 4),
         ),
       ],
@@ -1244,12 +1243,12 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           width: 36,
           height: 36,
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.2),
+            color: AppColors.primaryBlue.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: const Icon(
+          child: Icon(
             Icons.wb_sunny_outlined,
-            color: Colors.white,
+            color: AppColors.primaryBlue,
             size: 20,
           ),
         ),
@@ -1265,7 +1264,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 style: GoogleFonts.inter(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
-                  color: Colors.white,
+                  color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
                 ),
               ),
               const SizedBox(height: 2),
@@ -1274,7 +1273,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 style: GoogleFonts.inter(
                   fontSize: 12,
                   fontWeight: FontWeight.w400,
-                  color: Colors.white.withValues(alpha: 0.8),
+                  color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
                 ),
               ),
             ],
@@ -1284,7 +1283,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
         // Info Icon
         Icon(
           Icons.info_outline,
-          color: Colors.white.withValues(alpha: 0.9),
+          color: AppColors.primaryBlue.withValues(alpha: 0.9),
           size: 20,
         ),
       ],

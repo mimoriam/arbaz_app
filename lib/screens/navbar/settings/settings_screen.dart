@@ -627,7 +627,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                     // Safety Vault Card - Senior only
                     if (!widget.isFamilyView) ...[
-                      const SizedBox(height: 12),
+                      // const SizedBox(height: 4),
                       _buildSafetyVaultCard(isDarkMode),
                     ],
 
@@ -732,19 +732,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           width: double.infinity,
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [const Color(0xFF6366F1), const Color(0xFF818CF8)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+            color: isDarkMode ? AppColors.surfaceDark : Colors.white,
             borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF6366F1).withValues(alpha: 0.3),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
-              ),
-            ],
+            border: Border.all(
+              color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+            ),
           ),
           child: Row(
             children: [
@@ -753,12 +745,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.2),
+                  color: AppColors.primaryBlue.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.wb_sunny_outlined,
-                  color: Colors.white,
+                  color: AppColors.primaryBlue,
                   size: 24,
                 ),
               ),
@@ -772,9 +764,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     Text(
                       'Vacation Mode',
                       style: GoogleFonts.inter(
-                        fontSize: 18,
+                        fontSize: 17,
                         fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                        color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -783,7 +775,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       style: GoogleFonts.inter(
                         fontSize: 13,
                         fontWeight: FontWeight.w400,
-                        color: Colors.white.withValues(alpha: 0.8),
+                        color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
                       ),
                     ),
                   ],
@@ -801,7 +793,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           height: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: Colors.white,
+                            color: AppColors.primaryBlue,
                           ),
                         ),
                       ),
@@ -825,7 +817,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         );
                       }
-                    }, isLight: true),
+                    }),
             ],
           ),
         );
@@ -1681,22 +1673,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         width: double.infinity,
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              AppColors.successGreen,
-              AppColors.successGreen.withValues(alpha: 0.8),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
+          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
           borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.successGreen.withValues(alpha: 0.3),
-              blurRadius: 16,
-              offset: const Offset(0, 6),
-            ),
-          ],
+          border: Border.all(
+            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+          ),
         ),
         child: Row(
           children: [
@@ -1704,10 +1685,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.2),
+                color: AppColors.primaryBlue.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Icon(Icons.qr_code_2, color: Colors.white, size: 24),
+              child: Icon(Icons.qr_code_2, color: AppColors.primaryBlue, size: 24),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -1717,9 +1698,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Text(
                     'Generate Invite Code',
                     style: GoogleFonts.inter(
-                      fontSize: 18,
+                      fontSize: 17,
                       fontWeight: FontWeight.w700,
-                      color: Colors.white,
+                      color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -1728,7 +1709,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: GoogleFonts.inter(
                       fontSize: 13,
                       fontWeight: FontWeight.w400,
-                      color: Colors.white.withValues(alpha: 0.8),
+                      color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
                     ),
                   ),
                 ],
@@ -1736,7 +1717,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             Icon(
               Icons.chevron_right,
-              color: Colors.white.withValues(alpha: 0.9),
+              color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
               size: 24,
             ),
           ],
@@ -2451,15 +2432,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         width: double.infinity,
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: AppColors.vaultCard,
+          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
           borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.2),
-              blurRadius: 16,
-              offset: const Offset(0, 6),
-            ),
-          ],
+          border: Border.all(
+            color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+          ),
         ),
         child: Row(
           children: [
@@ -2468,7 +2445,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.1),
+                color: AppColors.primaryBlue.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Icon(
@@ -2487,9 +2464,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Text(
                     'Safety Vault',
                     style: GoogleFonts.inter(
-                      fontSize: 18,
+                      fontSize: 17,
                       fontWeight: FontWeight.w700,
-                      color: Colors.white,
+                      color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -2498,7 +2475,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: GoogleFonts.inter(
                       fontSize: 13,
                       fontWeight: FontWeight.w400,
-                      color: Colors.white.withValues(alpha: 0.6),
+                      color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
                     ),
                   ),
                 ],
@@ -2508,7 +2485,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // Arrow
             Icon(
               Icons.chevron_right,
-              color: Colors.white.withValues(alpha: 0.5),
+              color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
               size: 24,
             ),
           ],
