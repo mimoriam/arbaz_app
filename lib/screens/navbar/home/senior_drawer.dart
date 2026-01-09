@@ -1,6 +1,7 @@
 import 'package:arbaz_app/screens/navbar/calendar/calendar_screen.dart';
 import 'package:arbaz_app/screens/navbar/cognitive_games/cognitive_games_screen.dart';
 import 'package:arbaz_app/screens/navbar/settings/settings_screen.dart';
+import 'package:arbaz_app/screens/paywall/paywall_screen.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -11,6 +12,7 @@ class SeniorDrawer extends StatelessWidget {
   final String? photoUrl;
   final VoidCallback onSwitchToFamily;
   final bool isDarkMode;
+  final bool isPro;
 
   const SeniorDrawer({
     super.key,
@@ -18,6 +20,7 @@ class SeniorDrawer extends StatelessWidget {
     this.photoUrl,
     required this.onSwitchToFamily,
     required this.isDarkMode,
+    this.isPro = false,
   });
 
   @override
@@ -61,16 +64,42 @@ class SeniorDrawer extends StatelessWidget {
                   showEditBadge: false,
                 ),
                 const SizedBox(height: 16),
-                Text(
-                  userName.isNotEmpty ? userName : 'User',
-                  style: GoogleFonts.inter(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w800,
-                    color: isDarkMode
-                        ? AppColors.textPrimaryDark
-                        : AppColors.textPrimary,
-                    letterSpacing: -0.5,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        userName.isNotEmpty ? userName : 'User',
+                        style: GoogleFonts.inter(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          color: isDarkMode
+                              ? AppColors.textPrimaryDark
+                              : AppColors.textPrimary,
+                          letterSpacing: -0.5,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (isPro) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryOrange,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'PRO',
+                          style: GoogleFonts.inter(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 Text(
                   'Senior View',
@@ -84,13 +113,39 @@ class SeniorDrawer extends StatelessWidget {
             ),
           ),
 
-          const SizedBox(height: 16),
-
           // Menu Items
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               children: [
+                 // Get Pro Item (if not pro) OR Pro Status
+                if (!isPro)
+                  _buildDrawerItem(
+                    context,
+                    icon: isPro ? Icons.verified_user_rounded : Icons.diamond_outlined,
+                    label: isPro ? 'Pro Active' : 'Get Pro',
+                    onTap: () {
+                      Navigator.pop(context);
+                      // Navigate to Paywall if not Pro, or maybe specific Pro settings?
+                      // For now, always open Paywall to manage subscription
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const PaywallScreen(),
+                        ),
+                      );
+                    },
+                    isHighlight: !isPro, // Highlight "Get Pro"
+                    customColor: isPro
+                        ? AppColors.successGreen
+                        : AppColors.primaryOrange,
+                  ),
+                
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Divider(),
+                ),
+
                 _buildDrawerItem(
                   context,
                   icon: Icons.calendar_today_rounded,
@@ -145,7 +200,8 @@ class SeniorDrawer extends StatelessWidget {
                     Navigator.pop(context);
                     onSwitchToFamily();
                   },
-                  isHighlight: true,
+                  isHighlight: true, // Keep as highlight or standard
+                  customColor: AppColors.primaryBlue,
                 ),
               ],
             ),
@@ -173,8 +229,10 @@ class SeniorDrawer extends StatelessWidget {
     required String label,
     required VoidCallback onTap,
     bool isHighlight = false,
+    Color? customColor,
   }) {
-    final color = isHighlight ? AppColors.primaryBlue : (isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary);
+    final defaultColor = isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary;
+    final color = customColor ?? (isHighlight ? AppColors.primaryBlue : defaultColor);
     
     return ListTile(
       onTap: onTap,
@@ -201,3 +259,4 @@ class SeniorDrawer extends StatelessWidget {
     );
   }
 }
+

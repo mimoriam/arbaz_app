@@ -4,6 +4,7 @@ import 'package:arbaz_app/screens/navbar/settings/safety_vault/safety_vault_scre
 import 'package:arbaz_app/services/role_preference_service.dart';
 import 'package:arbaz_app/services/vacation_mode_provider.dart';
 import 'dart:async';
+import 'package:arbaz_app/screens/paywall/paywall_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -56,12 +57,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLocationEnabled = false;
   bool _isNotificationEnabled = false;
   StreamSubscription<ServiceStatus>? _locationServiceStatusSubscription;
+  StreamSubscription<UserRoles?>? _rolesSubscription;
   
   // Profile Image
   String? _profilePhotoUrl;
   bool _isUploadingPhoto = false;
   final StorageService _storageService = StorageService();
   final ImagePicker _imagePicker = ImagePicker();
+  bool _isPro = false;
+  String _subscriptionPlan = 'free';
 
   @override
   void initState() {
@@ -76,6 +80,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _checkNotificationPermission();
       },
     );
+
+    // Real-time stream subscription for roles (Pro status)
+    _rolesSubscription = context.read<FirestoreService>().streamUserRoles(FirebaseAuth.instance.currentUser?.uid ?? '').listen((roles) {
+      if (mounted && roles != null) {
+        setState(() {
+          _isPro = roles.isPro;
+          _subscriptionPlan = roles.subscriptionPlan;
+        });
+      }
+    });
 
     _locationServiceStatusSubscription =
         Geolocator.getServiceStatusStream().listen((status) {
@@ -113,6 +127,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _locationServiceStatusSubscription?.cancel();
+    _rolesSubscription?.cancel();
     _lifecycleListener.dispose();
     super.dispose();
   }
@@ -232,6 +247,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           }
         });
       }
+      
+      // Roles are now handled by stream, but initial fetch doesn't hurt
     } catch (e) {
       debugPrint('Error loading user profile: $e');
     }
@@ -554,7 +571,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // Content
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -565,14 +582,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       title: 'CRUCIAL SETTINGS',
                       icon: Icons.verified_user_outlined,
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     _buildCrucialSettingsCard(isDarkMode),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 12),
 
                     // Vacation Mode Card - Senior only
                     if (!widget.isFamilyView) ...[
                       _buildVacationModeCard(isDarkMode),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 12),
                     ],
 
                     // Check-in Schedule Section - Senior only
@@ -582,21 +599,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         icon: Icons.access_time_outlined,
                         title: 'CHECK-IN SCHEDULE',
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 8),
                       _buildCheckInSchedule(isDarkMode),
-                      const SizedBox(height: 18),
-                    ],
-
-                    // Step Options Section - Senior only
-                    if (!widget.isFamilyView) ...[
-                      _buildSectionHeader(
-                        isDarkMode,
-                        icon: Icons.grid_view_outlined,
-                        title: 'STEP OPTIONS',
-                      ),
                       const SizedBox(height: 12),
-                      _buildStepOptions(isDarkMode),
-                      const SizedBox(height: 18),
                     ],
 
                     // // Appearance Section (Dark Mode) - Both, moved above Identity
@@ -605,10 +610,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     //   icon: Icons.palette_outlined,
                     //   title: 'APPEARANCE',
                     // ),
-                    // const SizedBox(height: 12),
+                    // const SizedBox(height: 8),
                     // _buildAppearanceSection(isDarkMode),
 
-                    // const SizedBox(height: 18),
+                    // const SizedBox(height: 12),
+
+                    // Subscription Section
+                    _buildSectionHeader(
+                      isDarkMode,
+                      icon: Icons.stars_rounded,
+                      title: 'SUBSCRIPTION',
+                    ),
+                    const SizedBox(height: 8),
+                    _buildSubscriptionSection(isDarkMode),
+
+                    const SizedBox(height: 12),
 
                     // Identity Section - Both
                     _buildSectionHeader(
@@ -616,10 +632,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       icon: Icons.alternate_email,
                       title: 'IDENTITY',
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     _buildIdentitySection(isDarkMode),
 
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 12),
+
+                    // Step Options Section - Senior only (moved here, between Identity and Family Circle)
+                    if (!widget.isFamilyView) ...[
+                      _buildSectionHeader(
+                        isDarkMode,
+                        icon: Icons.grid_view_outlined,
+                        title: 'STEP OPTIONS',
+                      ),
+                      const SizedBox(height: 8),
+                      _buildStepOptions(isDarkMode),
+                      const SizedBox(height: 12),
+                    ],
 
                     // Escalation Alarm Section - Senior only
                     // if (!widget.isFamilyView) ...[
@@ -628,9 +656,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     //     icon: Icons.notifications_outlined,
                     //     title: 'ESCALATION ALARM',
                     //   ),
-                    //   const SizedBox(height: 12),
+                    //   const SizedBox(height: 8),
                     //   _buildEscalationAlarm(isDarkMode),
-                    //   const SizedBox(height: 18),
+                    //   const SizedBox(height: 12),
                     // ],
 
                     // Family Circle Section - Both
@@ -639,15 +667,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       icon: Icons.people_outline,
                       title: 'FAMILY CIRCLE',
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     _buildFamilyCircle(isDarkMode),
 
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 12),
 
                     // Generate Invite Code Card - Both
                     _buildGenerateInviteCodeCard(isDarkMode),
 
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 12),
 
                     // // Family Dashboard Section - Family only
                     // if (widget.isFamilyView) ...[
@@ -656,7 +684,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     //     icon: Icons.dashboard_outlined,
                     //     title: 'DASHBOARD',
                     //   ),
-                    //   const SizedBox(height: 12),
+                    //   const SizedBox(height: 8),
                     //   _buildFamilyDashboardCard(isDarkMode),
                     // ],
 
@@ -666,12 +694,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _buildSafetyVaultCard(isDarkMode),
                     ],
 
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 12),
 
                     // Logout Button
                     _buildLogoutButton(isDarkMode),
 
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 24),
                   ],
                 ),
               ),
@@ -684,7 +712,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildHeader(bool isDarkMode) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
           // Back Button
@@ -1347,6 +1375,125 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           const SizedBox(height: 8),
         ],
+      ),
+    );
+  }
+
+  Widget _buildSubscriptionSection(bool isDarkMode) {
+    // Get display name for subscription plan
+    String planDisplayName;
+    switch (_subscriptionPlan) {
+      case 'plus':
+        planDisplayName = 'Plus Monthly';
+        break;
+      case 'premium':
+        planDisplayName = 'Premium Monthly';
+        break;
+      default:
+        planDisplayName = 'Free Plan';
+    }
+    
+    return Container(
+      decoration: BoxDecoration(
+        color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          children: [
+            // Current Plan Row
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _isPro 
+                        ? AppColors.primaryOrange.withValues(alpha: 0.1) 
+                        : Colors.grey.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.workspace_premium_rounded,
+                    size: 20,
+                    color: _isPro ? AppColors.primaryOrange : Colors.grey,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          planDisplayName,
+                          style: GoogleFonts.inter(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: isDarkMode ? Colors.white : AppColors.textPrimary,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (_isPro) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.successGreen.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            'ACTIVE',
+                            style: GoogleFonts.inter(
+                              fontSize: 8,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.successGreen,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                // Change Plan / Get Pro Button
+                GestureDetector(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const PaywallScreen()),
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _isPro 
+                          ? isDarkMode ? AppColors.surfaceDark : Colors.grey[100]
+                          : AppColors.primaryOrange,
+                      borderRadius: BorderRadius.circular(10),
+                      border: _isPro 
+                          ? Border.all(color: isDarkMode ? AppColors.borderDark : AppColors.borderLight)
+                          : null,
+                    ),
+                    child: Text(
+                      _isPro ? 'Change' : 'Upgrade',
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: _isPro 
+                            ? (isDarkMode ? Colors.white70 : AppColors.textSecondary)
+                            : Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

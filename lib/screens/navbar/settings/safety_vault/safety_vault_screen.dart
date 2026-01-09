@@ -9,7 +9,14 @@ import 'package:arbaz_app/models/security_vault.dart';
 
 /// Security Vault Screen for storing sensitive information securely
 class SafetyVaultScreen extends StatefulWidget {
-  const SafetyVaultScreen({super.key});
+  final String? userId; // Optional: View another user's vault
+  final bool isReadOnly; // Optional: Disable editing
+
+  const SafetyVaultScreen({
+    super.key,
+    this.userId,
+    this.isReadOnly = false,
+  });
 
   @override
   State<SafetyVaultScreen> createState() => _SafetyVaultScreenState();
@@ -22,6 +29,7 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
   
   // Multi-pet support
   List<PetInfo> _pets = [];
+  SecurityVault? _vault; // Store full vault object for checking empty fields
   
   // Track visibility of sensitive fields
   final Map<String, bool> _fieldVisibility = {};
@@ -33,18 +41,22 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
   }
 
   Future<void> _loadVaultData() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      setState(() => _isLoading = false);
+    final currentUser = FirebaseAuth.instance.currentUser;
+    // Use provided userId or fallback to current user
+    final targetUserId = widget.userId ?? currentUser?.uid;
+
+    if (targetUserId == null) {
+      if (mounted) setState(() => _isLoading = false);
       return;
     }
 
     try {
       final firestoreService = context.read<FirestoreService>();
-      final vault = await firestoreService.getSecurityVault(user.uid);
+      final vault = await firestoreService.getSecurityVault(targetUserId);
       
       if (vault != null && mounted) {
         setState(() {
+          _vault = vault;
           _pets = List.from(vault.pets);
         });
         
@@ -90,71 +102,108 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
                 child: _isLoading
                     ? const Center(child: CircularProgressIndicator())
                     : FormBuilder(
-                        key: _formKey,
-                        child: SingleChildScrollView(
-                          padding: const EdgeInsets.symmetric(horizontal: 20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(height: 16),
+                          key: _formKey,
+                          child: SingleChildScrollView(
+                            physics: const AlwaysScrollableScrollPhysics(), // Ensure scrolling works
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const SizedBox(height: 16),
+                                
+                                // Read-only Banner
+                                if (widget.isReadOnly) ...[
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    margin: const EdgeInsets.only(bottom: 20),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primaryBlue.withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: AppColors.primaryBlue.withValues(alpha: 0.3),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.info_outline, 
+                                          color: AppColors.primaryBlue,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Text(
+                                            'View-only mode during emergency',
+                                            style: GoogleFonts.inter(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w500,
+                                              color: AppColors.primaryBlue,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
 
-                              // Home Access Section
-                              _buildSectionHeader(
-                                isDarkMode,
-                                icon: Icons.home_outlined,
-                                title: 'HOME ACCESS',
-                                iconColor: AppColors.primaryBlue,
-                              ),
-                              const SizedBox(height: 12),
-                              _buildHomeAccessSection(isDarkMode),
+                                // Home Access Section
+                                _buildSectionHeader(
+                                  isDarkMode,
+                                  icon: Icons.home_outlined,
+                                  title: 'HOME ACCESS',
+                                  iconColor: AppColors.primaryBlue,
+                                ),
+                                const SizedBox(height: 12),
+                                _buildHomeAccessSection(isDarkMode),
 
-                              const SizedBox(height: 28),
+                                const SizedBox(height: 28),
 
-                              // Pet Care Section
-                              _buildSectionHeader(
-                                isDarkMode,
-                                icon: Icons.pets_outlined,
-                                title: 'PET CARE',
-                                iconColor: AppColors.warningOrange,
-                              ),
-                              const SizedBox(height: 12),
-                              _buildPetCareSection(isDarkMode),
+                                // Pet Care Section
+                                _buildSectionHeader(
+                                  isDarkMode,
+                                  icon: Icons.pets_outlined,
+                                  title: 'PET CARE',
+                                  iconColor: AppColors.warningOrange,
+                                ),
+                                const SizedBox(height: 12),
+                                _buildPetCareSection(isDarkMode),
 
-                              const SizedBox(height: 28),
+                                const SizedBox(height: 28),
 
-                              // Medical Info Section
-                              _buildSectionHeader(
-                                isDarkMode,
-                                icon: Icons.favorite_outline,
-                                title: 'MEDICAL INFO',
-                                iconColor: AppColors.dangerRed,
-                              ),
-                              const SizedBox(height: 12),
-                              _buildMedicalInfoSection(isDarkMode),
+                                // Medical Info Section
+                                _buildSectionHeader(
+                                  isDarkMode,
+                                  icon: Icons.favorite_outline,
+                                  title: 'MEDICAL INFO',
+                                  iconColor: AppColors.dangerRed,
+                                ),
+                                const SizedBox(height: 12),
+                                _buildMedicalInfoSection(isDarkMode),
 
-                              const SizedBox(height: 28),
+                                const SizedBox(height: 28),
 
-                              // Other Notes Section
-                              _buildSectionHeader(
-                                isDarkMode,
-                                icon: Icons.edit_note_outlined,
-                                title: 'OTHER NOTES',
-                                iconColor: AppColors.textSecondary,
-                              ),
-                              const SizedBox(height: 12),
-                              _buildOtherNotesSection(isDarkMode),
+                                // Other Notes Section
+                                _buildSectionHeader(
+                                  isDarkMode,
+                                  icon: Icons.edit_note_outlined,
+                                  title: 'OTHER NOTES',
+                                  iconColor: AppColors.textSecondary,
+                                ),
+                                const SizedBox(height: 12),
+                                _buildOtherNotesSection(isDarkMode),
 
-                              const SizedBox(height: 32),
+                                const SizedBox(height: 32),
 
-                              // Done Button
-                              _buildDoneButton(isDarkMode),
+                                // Done Button - Hide in Read-Only
+                                if (!widget.isReadOnly)
+                                  _buildDoneButton(isDarkMode),
 
-                              const SizedBox(height: 40),
-                            ],
+                                const SizedBox(height: 40),
+                              ],
+                            ),
                           ),
                         ),
                       ),
-              ),
             ],
           ),
         ),
@@ -193,7 +242,7 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
           Expanded(
             child: Center(
               child: Text(
-                'Security Vault',
+                widget.isReadOnly ? 'Emergency Vault' : 'Security Vault',
                 style: GoogleFonts.inter(
                   fontSize: 20,
                   fontWeight: FontWeight.w700,
@@ -244,19 +293,62 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
   }
 
   Widget _buildHomeAccessSection(bool isDarkMode) {
-    return _buildFormCard(
-      isDarkMode,
-      children: [
-        _buildTextField(isDarkMode, name: 'home_address', hint: 'Home address'),
-        _buildDivider(isDarkMode),
-        _buildTextField(isDarkMode, name: 'building_entry_code', hint: 'Building entry code', obscureText: true),
-        _buildDivider(isDarkMode),
-        _buildTextField(isDarkMode, name: 'apartment_door_code', hint: 'Apartment/door code', obscureText: true),
-        _buildDivider(isDarkMode),
-        _buildTextField(isDarkMode, name: 'spare_key_location', hint: 'Spare key location'),
-        _buildDivider(isDarkMode),
-        _buildTextField(isDarkMode, name: 'alarm_code', hint: 'Alarm code', isLast: true, obscureText: true),
-      ],
+    if (_vault == null && widget.isReadOnly) return const SizedBox.shrink();
+
+    final fields = <Widget>[];
+
+    void addField(String name, String hint, String? value, {bool obscure = false}) {
+      if (!widget.isReadOnly || (value != null && value.isNotEmpty)) {
+        fields.add(_buildTextField(
+          isDarkMode,
+          name: name,
+          hint: hint,
+          obscureText: obscure,
+        ));
+      }
+    }
+
+    addField('home_address', 'Home address', _vault?.homeAddress);
+    addField('building_entry_code', 'Building entry code', _vault?.buildingEntryCode, obscure: true);
+    addField('apartment_door_code', 'Apartment/door code', _vault?.apartmentDoorCode, obscure: true);
+    addField('spare_key_location', 'Spare key location', _vault?.spareKeyLocation);
+    addField('alarm_code', 'Alarm code', _vault?.alarmCode, obscure: true);
+
+    if (fields.isEmpty) {
+        if (widget.isReadOnly) return _buildEmptyStateMessage(isDarkMode);
+        return const SizedBox.shrink(); // Should not happen in edit mode
+    }
+
+    // Join with dividers
+    final children = <Widget>[];
+    for (int i = 0; i < fields.length; i++) {
+        children.add(fields[i]);
+        if (i < fields.length - 1) {
+            children.add(_buildDivider(isDarkMode));
+        }
+    }
+
+    return _buildFormCard(isDarkMode, children: children);
+  }
+
+  Widget _buildEmptyStateMessage(bool isDarkMode) {
+    return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+            color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: isDarkMode ? AppColors.borderDark : AppColors.borderLight),
+        ),
+        child: Text(
+            'No information provided.',
+            style: GoogleFonts.inter(
+                fontSize: 14,
+                color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+                fontStyle: FontStyle.italic,
+            ),
+            textAlign: TextAlign.center,
+        ),
     );
   }
 
@@ -273,41 +365,42 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
           );
         }),
         
-        // Add pet button
-        GestureDetector(
-          onTap: () => _showAddPetDialog(isDarkMode),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            decoration: BoxDecoration(
-              color: isDarkMode ? AppColors.surfaceDark : Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: AppColors.warningOrange.withValues(alpha: 0.3),
-                style: BorderStyle.solid,
+        // Add pet button - Hide in Read-Only
+        if (!widget.isReadOnly)
+          GestureDetector(
+            onTap: () => _showAddPetDialog(isDarkMode),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              decoration: BoxDecoration(
+                color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: AppColors.warningOrange.withValues(alpha: 0.3),
+                  style: BorderStyle.solid,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.add_circle_outline,
+                    color: AppColors.warningOrange,
+                    size: 22,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Add Pet',
+                    style: GoogleFonts.inter(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.warningOrange,
+                    ),
+                  ),
+                ],
               ),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.add_circle_outline,
-                  color: AppColors.warningOrange,
-                  size: 22,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Add Pet',
-                  style: GoogleFonts.inter(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.warningOrange,
-                  ),
-                ),
-              ],
-            ),
           ),
-        ),
       ],
     );
   }
@@ -316,92 +409,150 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
     return Container(
       decoration: BoxDecoration(
         color: isDarkMode ? AppColors.surfaceDark : Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: isDarkMode ? AppColors.borderDark : AppColors.borderLight,
         ),
+        boxShadow: [
+          if (!isDarkMode)
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+        ],
       ),
       child: Column(
         children: [
-          // Pet header with name, type, and delete button
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+          // Pet Header
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.warningOrange.withValues(alpha: 0.1),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
             child: Row(
               children: [
-                Icon(Icons.pets, color: AppColors.warningOrange, size: 20),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '${pet.name} (${pet.type})',
-                    style: GoogleFonts.inter(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
-                    ),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    pet.type.toLowerCase().contains('cat') 
+                        ? Icons.cruelty_free 
+                        : Icons.pets,
+                    color: AppColors.warningOrange,
+                    size: 24,
                   ),
                 ),
-                IconButton(
-                  onPressed: () => _showEditPetDialog(isDarkMode, pet, index),
-                  icon: Icon(Icons.edit_outlined, size: 20, color: AppColors.primaryBlue),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        pet.name,
+                        style: GoogleFonts.inter(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: isDarkMode ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                      Text(
+                        pet.type,
+                        style: GoogleFonts.inter(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: isDarkMode ? Colors.white60 : Colors.black54,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                IconButton(
-                  onPressed: () => _removePet(index),
-                  icon: Icon(Icons.delete_outline, size: 20, color: AppColors.dangerRed),
-                ),
+                if (!widget.isReadOnly) ...[
+                  IconButton(
+                    onPressed: () => _showEditPetDialog(isDarkMode, pet, index),
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      padding: const EdgeInsets.all(8),
+                    ),
+                    icon: const Icon(Icons.edit_rounded, size: 18, color: AppColors.primaryBlue),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: () => _removePet(index),
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      padding: const EdgeInsets.all(8),
+                    ),
+                    icon: const Icon(Icons.delete_rounded, size: 18, color: AppColors.dangerRed),
+                  ),
+                ],
               ],
             ),
           ),
           
-          // Pet details
-          if (pet.medications != null || pet.vetNamePhone != null || 
-              pet.foodInstructions != null || pet.specialNeeds != null) ...[
-            _buildDivider(isDarkMode),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (pet.medications != null && pet.medications!.isNotEmpty)
-                    _buildPetDetailRow('Medications', pet.medications!, isDarkMode),
-                  if (pet.vetNamePhone != null && pet.vetNamePhone!.isNotEmpty)
-                    _buildPetDetailRow('Vet', pet.vetNamePhone!, isDarkMode),
-                  if (pet.foodInstructions != null && pet.foodInstructions!.isNotEmpty)
-                    _buildPetDetailRow('Food', pet.foodInstructions!, isDarkMode),
-                  if (pet.specialNeeds != null && pet.specialNeeds!.isNotEmpty)
-                    _buildPetDetailRow('Special Needs', pet.specialNeeds!, isDarkMode),
-                ],
-              ),
+          // Pet Details
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                if (pet.medications != null && pet.medications!.isNotEmpty)
+                  _buildPetDetailRow(Icons.medication, 'Medications', pet.medications!, isDarkMode),
+                if (pet.vetNamePhone != null && pet.vetNamePhone!.isNotEmpty)
+                  _buildPetDetailRow(Icons.local_hospital, 'Vet Info', pet.vetNamePhone!, isDarkMode),
+                if (pet.foodInstructions != null && pet.foodInstructions!.isNotEmpty)
+                  _buildPetDetailRow(Icons.restaurant, 'Food', pet.foodInstructions!, isDarkMode),
+                if (pet.specialNeeds != null && pet.specialNeeds!.isNotEmpty)
+                  _buildPetDetailRow(Icons.warning_amber_rounded, 'Special Needs', pet.specialNeeds!, isDarkMode, isAlert: true),
+              ],
             ),
-          ],
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildPetDetailRow(String label, String value, bool isDarkMode) {
+  Widget _buildPetDetailRow(IconData icon, String label, String value, bool isDarkMode, {bool isAlert = false}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.only(bottom: 16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 100,
-            child: Text(
-              '$label:',
-              style: GoogleFonts.inter(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
-              ),
-            ),
+          Icon(
+            icon,
+            size: 18,
+            color: isAlert 
+                ? AppColors.dangerRed 
+                : (isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary),
           ),
+          const SizedBox(width: 14),
           Expanded(
-            child: Text(
-              value,
-              style: GoogleFonts.inter(
-                fontSize: 13,
-                color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: GoogleFonts.inter(
+                    fontSize: 14,
+                    height: 1.4,
+                    color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+                    fontWeight: isAlert ? FontWeight.w500 : FontWeight.normal,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -594,6 +745,8 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
         TextField(
           controller: controller,
           onChanged: onChanged,
+          // Hide textfield from accepting input if strictly read-only mode for safety (though dialog shouldn't open)
+          enabled: !widget.isReadOnly,  
           style: GoogleFonts.inter(
             fontSize: 15,
             color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
@@ -651,21 +804,44 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
   }
 
   Widget _buildMedicalInfoSection(bool isDarkMode) {
-    return _buildFormCard(
-      isDarkMode,
-      children: [
-        _buildTextField(isDarkMode, name: 'doctor_name_phone', hint: "Doctor's name and phone"),
-        _buildDivider(isDarkMode),
-        _buildTextArea(isDarkMode, name: 'medications_list', hint: 'Medications list', maxLines: 3),
-        _buildDivider(isDarkMode),
-        _buildTextField(isDarkMode, name: 'allergies', hint: 'Allergies'),
-        _buildDivider(isDarkMode),
-        _buildTextArea(isDarkMode, name: 'medical_conditions', hint: 'Medical conditions', maxLines: 2, isLast: true),
-      ],
-    );
+    if (_vault == null && widget.isReadOnly) return const SizedBox.shrink();
+
+    final fields = <Widget>[];
+
+    void addField(String name, String hint, String? value, {bool isTextArea = false, int maxLines = 1}) {
+      if (!widget.isReadOnly || (value != null && value.isNotEmpty)) {
+        if (isTextArea) {
+             fields.add(_buildTextArea(isDarkMode, name: name, hint: hint, maxLines: maxLines));
+        } else {
+             fields.add(_buildTextField(isDarkMode, name: name, hint: hint));
+        }
+      }
+    }
+
+    addField('doctor_name_phone', "Doctor's name and phone", _vault?.doctorNamePhone);
+    addField('medications_list', 'Medications list', _vault?.medicationsList, isTextArea: true, maxLines: 3);
+    addField('allergies', 'Allergies', _vault?.allergies);
+    addField('medical_conditions', 'Medical conditions', _vault?.medicalConditions, isTextArea: true, maxLines: 2);
+
+    if (fields.isEmpty) {
+        if (widget.isReadOnly) return _buildEmptyStateMessage(isDarkMode);
+    }
+    
+    final children = <Widget>[];
+    for (int i = 0; i < fields.length; i++) {
+        children.add(fields[i]);
+        if (i < fields.length - 1) {
+            children.add(_buildDivider(isDarkMode));
+        }
+    }
+
+    return _buildFormCard(isDarkMode, children: children);
   }
 
   Widget _buildOtherNotesSection(bool isDarkMode) {
+    if ((_vault?.otherNotes == null || _vault!.otherNotes!.isEmpty) && widget.isReadOnly) {
+        return _buildEmptyStateMessage(isDarkMode);
+    }
     return _buildFormCard(
       isDarkMode,
       children: [
@@ -712,6 +888,9 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
       name: name,
       obscureText: obscureText && !isVisible,
       keyboardType: keyboardType,
+      // Use readOnly instead of enabled for "View Only" mode to allow scrolling and prefix/suffix interaction
+      readOnly: widget.isReadOnly, 
+      enabled: true, 
       style: GoogleFonts.inter(
         fontSize: 15,
         fontWeight: FontWeight.w500,
@@ -757,6 +936,8 @@ class _SafetyVaultScreenState extends State<SafetyVaultScreen> {
     return FormBuilderTextField(
       name: name,
       maxLines: maxLines,
+      readOnly: widget.isReadOnly,
+      enabled: true,
       style: GoogleFonts.inter(
         fontSize: 15,
         fontWeight: FontWeight.w500,

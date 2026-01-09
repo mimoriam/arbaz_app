@@ -3,6 +3,7 @@ import 'package:arbaz_app/screens/navbar/calendar/calendar_screen.dart';
 import 'package:arbaz_app/screens/navbar/home/senior_checkin_flow.dart';
 import 'package:arbaz_app/screens/navbar/home/senior_drawer.dart';
 import 'package:arbaz_app/screens/navbar/settings/settings_screen.dart';
+import 'package:arbaz_app/screens/navbar/settings/safety_vault/safety_vault_screen.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/services/notification_service.dart';
 import 'package:arbaz_app/services/role_preference_service.dart';
@@ -66,6 +67,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   // User info
   String _userName = '';
   String? _photoUrl;
+  bool _isPro = false;
 
   
   // Real-time stream subscription for senior state updates
@@ -73,6 +75,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   
   // Real-time stream subscription for profile updates (photo sync)
   StreamSubscription<UserProfile?>? _profileSubscription;
+
+  // Real-time stream subscription for roles (Pro status)
+  StreamSubscription<UserRoles?>? _rolesSubscription;
   
   // Timer to trigger status update when nextExpectedCheckIn is reached
   Timer? _checkInDeadlineTimer;
@@ -319,6 +324,22 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           if (mounted) {
             setState(() => _isLoadingCheckInStatus = false);
           }
+        },
+
+      );
+
+      // Subscribe to User Roles for real-time Pro status updates
+      _rolesSubscription?.cancel();
+      _rolesSubscription = firestoreService.streamUserRoles(user.uid).listen(
+        (roles) {
+          if (mounted && roles != null) {
+            setState(() {
+              _isPro = roles.isPro;
+            });
+          }
+        },
+        onError: (e) {
+          debugPrint('Error streaming user roles: $e');
         },
       );
 
@@ -949,7 +970,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
               userName: _userName,
               photoUrl: _photoUrl,
               isDarkMode: isDarkMode,
+
               onSwitchToFamily: _switchToFamily,
+              isPro: _isPro,
             ),
             body: SafeArea(
               child: Column(
@@ -1814,7 +1837,7 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 2, vsync: this);
     _loadSeniorData();
     _subscribeToOwnProfile();
     _listenToConnectionChanges(); // Start listening for connection changes
@@ -2707,7 +2730,6 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                           children: [
                             _buildStatusTab(isDarkMode),
                             _buildHealthTab(isDarkMode),
-                            _buildVaultTab(isDarkMode),
                           ],
                         ),
                       ),
@@ -3058,7 +3080,6 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
         tabs: const [
           Tab(text: 'Status'),
           Tab(text: 'Health'),
-          Tab(text: 'Vault'),
         ],
       ),
     );
@@ -3272,6 +3293,12 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
           // Senior Selector Dropdown (only show if 2+ seniors)
           if (_allSeniors.length >= 2) ...[
             _buildSeniorSelector(isDarkMode),
+            const SizedBox(height: 16),
+          ],
+          
+          // SOS Alert: Show Safety Vault Card
+          if (_seniorData?.sosActive == true) ...[
+            _buildVaultCard(isDarkMode),
             const SizedBox(height: 16),
           ],
           
@@ -3498,95 +3525,152 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
                     child: InkWell(
                       onTap: () {
                         Navigator.pop(context);
-                        if (senior.id != _selectedSeniorId) {
-                          _onSeniorChanged(senior.id);
-                        }
+                        _onSeniorChanged(senior.id);
                       },
                       child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24, 
-                          vertical: 14,
-                        ),
-                        decoration: isSelected ? BoxDecoration(
-                          color: AppColors.successGreen.withValues(alpha: 0.1),
-                        ) : null,
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        color: isSelected 
+                            ? (isDarkMode ? Colors.white.withValues(alpha: 0.05) : AppColors.primaryBlue.withValues(alpha: 0.05))
+                            : null,
                         child: Row(
                           children: [
                             // Avatar
                             ProfileAvatar(
                               photoUrl: senior.photoUrl,
                               name: senior.name,
-                              radius: 22,
+                              radius: 20,
                               isDarkMode: isDarkMode,
-                              gradientColors: isSelected 
-                                  ? [
-                                      AppColors.successGreen,
-                                      AppColors.successGreen.withValues(alpha: 0.8),
-                                    ]
-                                  : null,
                             ),
-                            const SizedBox(width: 14),
+                            const SizedBox(width: 16),
                             
-                            // Name & subtitle
+                            // Name
                             Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    senior.name,
-                                    style: GoogleFonts.inter(
-                                      fontSize: 16,
-                                      fontWeight: isSelected 
-                                          ? FontWeight.w700 
-                                          : FontWeight.w600,
-                                      color: isSelected
-                                          ? AppColors.successGreen
-                                          : (isDarkMode ? Colors.white : Colors.black87),
-                                    ),
-                                  ),
-                                  Text(
-                                    'Senior',
-                                    style: GoogleFonts.inter(
-                                      fontSize: 13,
-                                      color: isDarkMode 
-                                          ? AppColors.textSecondaryDark 
-                                          : AppColors.textSecondary,
-                                    ),
-                                  ),
-                                ],
+                              child: Text(
+                                senior.name,
+                                style: GoogleFonts.inter(
+                                  fontSize: 16,
+                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                                  color: isDarkMode ? Colors.white : Colors.black87,
+                                ),
                               ),
                             ),
                             
-                            // Selected indicator
+                            // Selected Checkmark
                             if (isSelected)
                               Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
+                                padding: const EdgeInsets.all(4),
+                                decoration: const BoxDecoration(
                                   color: AppColors.successGreen,
                                   shape: BoxShape.circle,
                                 ),
                                 child: const Icon(
                                   Icons.check,
-                                  size: 16,
+                                  size: 14,
                                   color: Colors.white,
                                 ),
                               ),
                           ],
                         ),
                       ),
-                    ),
-                  );
-                },
+                    ));
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      );
+  }
+
+  Widget _buildVaultCard(bool isDarkMode) {
+    return GestureDetector(
+      onTap: () {
+        if (_selectedSeniorId == null) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => SafetyVaultScreen(
+              userId: _selectedSeniorId,
+              isReadOnly: true, // Emergency view is read-only
+            ),
+          ),
+        );
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: isDarkMode ? AppColors.surfaceDark : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: AppColors.dangerRed.withValues(alpha: 0.5), // Red border for emergency
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.dangerRed.withValues(alpha: 0.15),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            // Lock Icon with Red Warning styling
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: AppColors.dangerRed.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.lock_open_rounded,
+                color: AppColors.dangerRed,
+                size: 24,
               ),
             ),
-            
-            // Bottom padding for safe area
-            SizedBox(height: MediaQuery.of(context).padding.bottom + 16),
+            const SizedBox(width: 16),
+
+            // Text
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Emergency Vault',
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: isDarkMode ? AppColors.textPrimaryDark : AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Access Critical Info',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w400,
+                      color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Arrow
+            Icon(
+              Icons.chevron_right,
+              color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+              size: 24,
+            ),
           ],
         ),
       ),
     );
   }
+
 
 
   Widget _buildInviteCard(bool isDarkMode) {
@@ -3615,19 +3699,20 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
             textAlign: TextAlign.center,
             style: GoogleFonts.inter(color: Colors.grey),
           ),
-          // ElevatedButton.icon(
-          //   onPressed: _onInviteFamily,
-          //   icon: const Icon(Icons.qr_code),
-          //   label: const Text('Generate Invite QR/Code'),
-          //   style: ElevatedButton.styleFrom(
-          //     backgroundColor: AppColors.primaryBlue,
-          //     foregroundColor: Colors.white,
-          //     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          //     shape: RoundedRectangleBorder(
-          //       borderRadius: BorderRadius.circular(12),
-          //     ),
-          //   ),
-          // ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: _onInviteFamily,
+            icon: const Icon(Icons.qr_code),
+            label: const Text('Generate Invite QR/Code'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryBlue,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
         ],
       ),
     );

@@ -446,6 +446,22 @@ class FirestoreService {
     }, SetOptions(merge: true));
   }
 
+  /// Updates the user's Pro subscription status and plan type.
+  Future<void> setProStatus(String uid, bool isPro, {String subscriptionPlan = 'free'}) async {
+    await _rolesRef(uid).set({
+      'isPro': isPro,
+      'subscriptionPlan': subscriptionPlan,
+    }, SetOptions(merge: true));
+  }
+
+  /// Streams the user's roles (including Pro status)
+  Stream<UserRoles?> streamUserRoles(String uid) {
+    return _rolesRef(uid).snapshots().map((doc) {
+      if (!doc.exists) return null;
+      return UserRoles.fromFirestore(doc);
+    });
+  }
+
 
   // ===== Volatile State Operations =====
 

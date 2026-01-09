@@ -7,6 +7,10 @@ class AppColors {
   // Primary Palette
   static const Color primaryBlue = Color(0xFF246BFD);
   static const Color primaryBlueLight = Color(0xFFE9F0FF);
+  
+  // Pro / Subscription Colors
+  static const Color primaryTeal = Color(0xFF0D9488);
+  static const Color primaryOrange = Color(0xFFF97316);
 
   // Status & Actions
   static const Color successGreen = Color(0xFF22C55E);

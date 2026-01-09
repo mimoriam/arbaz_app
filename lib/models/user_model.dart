@@ -133,14 +133,18 @@ class UserProfile {
 class UserRoles {
   final bool isSenior;
   final bool isFamilyMember;
+  final bool isPro; // Pro subscription status
   final String? activeRole; // The persisted active role: 'senior' or 'family'
   final bool hasConfirmedSeniorRole; // True if user explicitly opted into senior features
+  final String subscriptionPlan; // 'free', 'plus', or 'premium'
 
   UserRoles({
     this.isSenior = false, 
     this.isFamilyMember = false,
+    this.isPro = false,
     this.activeRole,
     this.hasConfirmedSeniorRole = false,
+    this.subscriptionPlan = 'free',
   });
 
   /// Derived from flags - not stored, prevents invalid states
@@ -149,6 +153,18 @@ class UserRoles {
     if (isSenior) return 'senior';
     if (isFamilyMember) return 'family';
     return 'unassigned';
+  }
+
+  /// Get display name for subscription plan
+  String get subscriptionPlanDisplayName {
+    switch (subscriptionPlan) {
+      case 'plus':
+        return 'Plus Monthly';
+      case 'premium':
+        return 'Premium Monthly';
+      default:
+        return 'Free Plan';
+    }
   }
 
   factory UserRoles.fromFirestore(DocumentSnapshot doc) {
@@ -160,8 +176,10 @@ class UserRoles {
     return UserRoles(
       isSenior: data['isSenior'] == true,
       isFamilyMember: data['isFamilyMember'] == true,
+      isPro: data['isPro'] == true,
       activeRole: data['currentRole'] as String?,
       hasConfirmedSeniorRole: data['hasConfirmedSeniorRole'] == true,
+      subscriptionPlan: (data['subscriptionPlan'] as String?) ?? 'free',
     );
   }
 
@@ -169,22 +187,28 @@ class UserRoles {
     return {
       'isSenior': isSenior, 
       'isFamilyMember': isFamilyMember,
+      'isPro': isPro,
       'currentRole': activeRole,
       'hasConfirmedSeniorRole': hasConfirmedSeniorRole,
+      'subscriptionPlan': subscriptionPlan,
     };
   }
 
   UserRoles copyWith({
     bool? isSenior, 
     bool? isFamilyMember,
+    bool? isPro,
     String? activeRole,
     bool? hasConfirmedSeniorRole,
+    String? subscriptionPlan,
   }) {
     return UserRoles(
       isSenior: isSenior ?? this.isSenior,
       isFamilyMember: isFamilyMember ?? this.isFamilyMember,
+      isPro: isPro ?? this.isPro,
       activeRole: activeRole ?? this.activeRole,
       hasConfirmedSeniorRole: hasConfirmedSeniorRole ?? this.hasConfirmedSeniorRole,
+      subscriptionPlan: subscriptionPlan ?? this.subscriptionPlan,
     );
   }
 }
