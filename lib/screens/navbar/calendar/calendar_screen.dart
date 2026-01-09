@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
+import 'package:arbaz_app/utils/subscription_helper.dart';
+import 'package:arbaz_app/screens/paywall/paywall_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
+import 'package:arbaz_app/models/user_model.dart';
 import 'package:arbaz_app/models/checkin_model.dart';
 
 /// Represents a check-in entry with details about the day
@@ -45,6 +49,10 @@ class _CalendarScreenState extends State<CalendarScreen>
 
   // Derived map for easy lookup by day
   Map<int, List<CheckInRecord>> _checkInsByDay = {};
+  
+  // Subscription tracking for history limit
+  StreamSubscription<UserRoles?>? _rolesSubscription;
+  String _subscriptionPlan = 'free';
 
   @override
   void initState() {
@@ -60,6 +68,21 @@ class _CalendarScreenState extends State<CalendarScreen>
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _fetchMonthlyData();
+      _initSubscriptionStream();
+    });
+  }
+  
+  void _initSubscriptionStream() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    
+    final firestoreService = context.read<FirestoreService>();
+    _rolesSubscription = firestoreService.streamUserRoles(user.uid).listen((roles) {
+      if (roles != null && mounted) {
+        setState(() {
+          _subscriptionPlan = roles.subscriptionPlan;
+        });
+      }
     });
   }
 
@@ -321,22 +344,27 @@ class _CalendarScreenState extends State<CalendarScreen>
               ),
             ),
           ),
-          const Spacer(),
+          const SizedBox(width: 16),
           // Title - show senior's name if viewing as family member
-          Text(
-            widget.isFamilyView 
-                ? "${widget.seniorName ?? 'Senior'}'s Progress"
-                : 'My Progress',
-            style: GoogleFonts.inter(
-              fontSize: widget.isFamilyView ? 18 : 22,
-              fontWeight: FontWeight.w800,
-              color: isDarkMode
-                  ? AppColors.textPrimaryDark
-                  : AppColors.textPrimary,
-              letterSpacing: -0.5,
+          Expanded(
+            child: Text(
+              widget.isFamilyView 
+                  ? "${widget.seniorName ?? 'Senior'}'s Progress"
+                  : 'My Progress',
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.inter(
+                fontSize: widget.isFamilyView ? 18 : 22,
+                fontWeight: FontWeight.w800,
+                color: isDarkMode
+                    ? AppColors.textPrimaryDark
+                    : AppColors.textPrimary,
+                letterSpacing: -0.5,
+              ),
             ),
           ),
-          const Spacer(),
+          const SizedBox(width: 16),
           // Placeholder for symmetry
           const SizedBox(width: 44),
         ],
@@ -853,7 +881,100 @@ class _CalendarScreenState extends State<CalendarScreen>
     );
   }
 
+  /// Shows a dialog when free user tries to view history older than 7 days
+  void _showHistoryLimitDialog(bool isDarkMode) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        backgroundColor: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.primaryOrange.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.history,
+                color: AppColors.primaryOrange,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'History Limit',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: isDarkMode ? Colors.white : AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Free plan allows viewing up to 7 days of history. Upgrade to Plus for full access!',
+          style: GoogleFonts.inter(
+            fontSize: 15,
+            height: 1.5,
+            color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(
+              'Not Now',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: isDarkMode ? Colors.white70 : AppColors.textSecondary,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const PaywallScreen()),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              'Upgrade',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showDateDetails() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    
+    // Check if date is older than 7 days and user is on free plan
+    if (!SubscriptionHelper.canViewHistoryBeyond7Days(_subscriptionPlan)) {
+      if (!SubscriptionHelper.isDateWithinFreeHistoryLimit(_selectedDate)) {
+        // Show upgrade dialog for dates older than 7 days
+        _showHistoryLimitDialog(isDarkMode);
+        return;
+      }
+    }
+    
     // Validate that selected date is in the current month
     final lookupDate =
         (_selectedDate.year == _currentMonth.year &&
@@ -871,7 +992,6 @@ class _CalendarScreenState extends State<CalendarScreen>
       sortedRecords.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     }
 
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final checkInCount = sortedRecords.length;
 
     showModalBottomSheet(

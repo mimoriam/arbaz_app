@@ -716,8 +716,8 @@ async function sendMissedCheckInNotification(userId, missedCount) {
     
     // Build notification based on missed count
     const title = missedCount === 1 
-      ? "Check-in Reminder (FCM)"
-      : "Multiple Missed Check-ins (FCM)";
+      ? "Check-in Reminder"
+      : "Multiple Missed Check-ins";
     
     const body = missedCount === 1
       ? "You haven't checked in yet today. Tap to let your family know you're okay!"
@@ -997,6 +997,13 @@ exports.handleMissedCheckIn = onRequest({
         
         logger.info(`Family notification: Found ${connectedUsers.length} active connections for user ${userId}`);
           
+        // Fetch senior's name for better notification context
+        const seniorProfileDoc = await db.collection("users").doc(userId)
+          .collection("data").doc("profile").get();
+        const seniorName = seniorProfileDoc.exists 
+          ? (seniorProfileDoc.data()?.displayName || "A connected senior") 
+          : "A connected senior";
+
         if (connectedUsers.length > 0) {
           const familyNotificationPromises = connectedUsers.map(async (connection) => {
             const connectedUserId = connection.userId;
@@ -1025,8 +1032,8 @@ exports.handleMissedCheckIn = onRequest({
                 const result = await admin.messaging().send({
                   token: connectedFcmToken,
                   notification: {
-                    title: "Missed Check-in Alert (FCM)",
-                    body: "A connected senior has missed a scheduled check-in. Please check on them.",
+                    title: "Missed Check-in Alert",
+                    body: `${seniorName} has missed a scheduled check-in. Please check on them.`,
                   },
                   data: {
                     type: "family_missed_alert",
@@ -1411,7 +1418,7 @@ exports.onSOSTriggered = onDocumentWritten({
     const message = {
       tokens,
       notification: {
-        title: "🚨 SOS Alert! (FCM)",
+        title: "🚨 SOS Alert!",
         body: notificationBody,
       },
       data: {
@@ -1439,7 +1446,7 @@ exports.onSOSTriggered = onDocumentWritten({
             sound: "default",
             badge: 1,
             alert: {
-              title: "🚨 SOS Alert! (FCM)",
+              title: "🚨 SOS Alert!",
               body: notificationBody,
             },
           },

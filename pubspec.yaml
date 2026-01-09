@@ -10,12 +10,13 @@ dependencies:
   flutter:
     sdk: flutter
 
+  alarm: ^5.1.5
   cached_network_image: ^3.4.1
   flutter_form_builder: ^10.2.0
   form_builder_validators: ^11.2.0
   flutter_launcher_icons: ^0.14.4
   fl_chart: ^1.1.1
-  google_fonts: ^6.3.3
+  google_fonts: ^7.0.0
   geolocator: ^14.0.2
   geocoding: ^4.0.0
   http: ^1.6.0

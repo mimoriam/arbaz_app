@@ -247,6 +247,10 @@ class SeniorState {
   final double? sosLocationLatitude; // Latitude when SOS was triggered
   final double? sosLocationLongitude; // Longitude when SOS was triggered
   final String? sosLocationAddress; // Geocoded address when SOS was triggered
+  
+  // Subscription limit tracking
+  final int gamesPlayedToday; // Counter for daily game plays (Free plan limit)
+  final DateTime? lastGamePlayResetDate; // For day boundary detection
 
   SeniorState({
     this.lastCheckIn,
@@ -272,6 +276,8 @@ class SeniorState {
     this.sosLocationLatitude,
     this.sosLocationLongitude,
     this.sosLocationAddress,
+    this.gamesPlayedToday = 0,
+    this.lastGamePlayResetDate,
   });
 
   factory SeniorState.fromFirestore(DocumentSnapshot doc) {
@@ -348,6 +354,10 @@ class SeniorState {
       sosLocationLatitude: (data['sosLocationLatitude'] as num?)?.toDouble(),
       sosLocationLongitude: (data['sosLocationLongitude'] as num?)?.toDouble(),
       sosLocationAddress: data['sosLocationAddress'] as String?,
+      gamesPlayedToday: (data['gamesPlayedToday'] as num?)?.toInt() ?? 0,
+      lastGamePlayResetDate: data['lastGamePlayResetDate'] is Timestamp
+          ? (data['lastGamePlayResetDate'] as Timestamp).toDate()
+          : null,
     );
   }
 
@@ -378,6 +388,8 @@ class SeniorState {
       'sosLocationLatitude': sosLocationLatitude,
       'sosLocationLongitude': sosLocationLongitude,
       'sosLocationAddress': sosLocationAddress,
+      'gamesPlayedToday': gamesPlayedToday,
+      'lastGamePlayResetDate': lastGamePlayResetDate != null ? Timestamp.fromDate(lastGamePlayResetDate!) : null,
     };
   }
 
@@ -405,6 +417,8 @@ class SeniorState {
     double? sosLocationLatitude,
     double? sosLocationLongitude,
     String? sosLocationAddress,
+    int? gamesPlayedToday,
+    DateTime? lastGamePlayResetDate,
   }) {
     return SeniorState(
       lastCheckIn: lastCheckIn ?? this.lastCheckIn,
@@ -431,6 +445,8 @@ class SeniorState {
       sosLocationLatitude: sosLocationLatitude ?? this.sosLocationLatitude,
       sosLocationLongitude: sosLocationLongitude ?? this.sosLocationLongitude,
       sosLocationAddress: sosLocationAddress ?? this.sosLocationAddress,
+      gamesPlayedToday: gamesPlayedToday ?? this.gamesPlayedToday,
+      lastGamePlayResetDate: lastGamePlayResetDate ?? this.lastGamePlayResetDate,
     );
   }
 }

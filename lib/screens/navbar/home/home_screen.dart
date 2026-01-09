@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:arbaz_app/utils/subscription_helper.dart';
 
 import 'package:arbaz_app/services/location_service.dart';
 import 'package:arbaz_app/services/contacts_service.dart';
@@ -68,6 +69,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
   String _userName = '';
   String? _photoUrl;
   bool _isPro = false;
+  String _subscriptionPlan = 'free';
 
   
   // Real-time stream subscription for senior state updates
@@ -335,6 +337,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
           if (mounted && roles != null) {
             setState(() {
               _isPro = roles.isPro;
+              _subscriptionPlan = roles.subscriptionPlan;
             });
           }
         },
@@ -707,7 +710,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     // Show confirmation dialog to prevent accidental triggers
     showDialog(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           shape: RoundedRectangleBorder(
@@ -974,6 +977,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
               onSwitchToFamily: _switchToFamily,
               isPro: _isPro,
             ),
+            floatingActionButton: _buildSosFab(isDarkMode),
+            floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
             body: SafeArea(
               child: Column(
                 children: [
@@ -1135,13 +1140,69 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     );
   }
 
+  /// Builds the SOS FAB as a squircle at bottom right
+  Widget? _buildSosFab(bool isDarkMode) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+    
+    // Check if user can use SOS button (Premium subscribers only)
+    if (!SubscriptionHelper.canUseSosButton(_subscriptionPlan)) return null;
+    
+    return StreamBuilder<List<FamilyContactModel>>(
+      stream: context.read<FamilyContactsService>().getContacts(user.uid),
+      builder: (context, snapshot) {
+        final contacts = snapshot.data ?? [];
+        final hasContacts = contacts.isNotEmpty;
+        
+        // Only show SOS FAB if user has family contacts
+        if (!hasContacts) return const SizedBox.shrink();
+        
+        return GestureDetector(
+          onTap: _isSendingHelp ? null : _onEmergencyTap,
+          child: Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              color: _isSendingHelp ? Colors.grey : const Color(0xFFFF2B2B),
+              borderRadius: BorderRadius.circular(20), // Squircle shape
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFFF2B2B).withValues(alpha: 0.4),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: _isSendingHelp
+                ? const Center(
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    ),
+                  )
+                : const Center(
+                    child: Icon(
+                      Icons.warning_rounded,
+                      color: Colors.white,
+                      size: 32,
+                    ),
+                  ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildHeader(bool isDarkMode) {
-    // We need to check contacts to decide whether to show SOS or Invite in the header
     final user = FirebaseAuth.instance.currentUser;
     final hasUser = user != null;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(0, 16, 0, 8), // 0 padding on sides for attached buttons
+      padding: const EdgeInsets.fromLTRB(0, 16, 0, 8),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -1179,7 +1240,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
             },
           ),
 
-          // SOS / Invite Button (Half-Pill attached to right)
+          // Invite Button (Half-Pill attached to right) - only show if no contacts
           if (hasUser)
             StreamBuilder<List<FamilyContactModel>>(
               stream: context.read<FamilyContactsService>().getContacts(user.uid),
@@ -1225,53 +1286,9 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                     ),
                   );
                 }
-
-                // SOS Button
-                return GestureDetector(
-                  onTap: _isSendingHelp ? null : _onEmergencyTap,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: _isSendingHelp ? Colors.grey : const Color(0xFFFF2B2B),
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(30),
-                        bottomLeft: Radius.circular(30),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFFFF2B2B).withValues(alpha: 0.4),
-                          blurRadius: 10,
-                          offset: const Offset(-2, 2),
-                        ),
-                      ],
-                    ),
-                    child: _isSendingHelp
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          )
-                        : Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.warning_rounded,
-                                  color: Colors.white, size: 24),
-                              const SizedBox(width: 8),
-                              Text(
-                                'SOS',
-                                style: GoogleFonts.inter(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
-                );
+                
+                // If has contacts, don't show anything in header (SOS moved to FAB)
+                return const SizedBox.shrink();
               },
             ),
         ],

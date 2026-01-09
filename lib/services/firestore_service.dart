@@ -641,6 +641,72 @@ class FirestoreService {
     }, SetOptions(merge: true));
   }
 
+  /// Atomically increments gamesPlayedToday counter with day boundary reset.
+  /// If the lastGamePlayResetDate is from a previous day, resets counter to 1.
+  /// Otherwise, increments the counter by 1.
+  /// Returns the new count for display purposes.
+  Future<int> incrementGamesPlayedToday(String uid) async {
+    final now = DateTime.now();
+    int newCount = 1;
+    
+    await _db.runTransaction((transaction) async {
+      final seniorStateDoc = await transaction.get(_seniorStateRef(uid));
+      
+      if (seniorStateDoc.exists) {
+        final data = seniorStateDoc.data() as Map<String, dynamic>?;
+        if (data != null) {
+          int currentCount = (data['gamesPlayedToday'] as num?)?.toInt() ?? 0;
+          DateTime? lastResetDate;
+          
+          if (data['lastGamePlayResetDate'] is Timestamp) {
+            lastResetDate = (data['lastGamePlayResetDate'] as Timestamp).toDate();
+          }
+          
+          // Check if it's a new day
+          final isNewDay = lastResetDate == null ||
+              lastResetDate.year != now.year ||
+              lastResetDate.month != now.month ||
+              lastResetDate.day != now.day;
+          
+          if (isNewDay) {
+            // Reset for new day
+            newCount = 1;
+          } else {
+            // Increment existing count
+            newCount = currentCount + 1;
+          }
+        }
+      }
+      
+      transaction.set(_seniorStateRef(uid), {
+        'gamesPlayedToday': newCount,
+        'lastGamePlayResetDate': Timestamp.fromDate(now),
+      }, SetOptions(merge: true));
+    });
+    
+    return newCount;
+  }
+
+  /// Gets current gamesPlayedToday count, handling day boundary reset.
+  /// Returns 0 if it's a new day or no data exists.
+  Future<int> getGamesPlayedToday(String uid) async {
+    final seniorState = await getSeniorState(uid);
+    if (seniorState == null) return 0;
+    
+    final now = DateTime.now();
+    final lastResetDate = seniorState.lastGamePlayResetDate;
+    
+    // Check if it's a new day
+    if (lastResetDate == null ||
+        lastResetDate.year != now.year ||
+        lastResetDate.month != now.month ||
+        lastResetDate.day != now.day) {
+      return 0; // New day, count resets
+    }
+    
+    return seniorState.gamesPlayedToday;
+  }
+
   Future<FamilyState?> getFamilyState(String uid) async {
     final doc = await _familyStateRef(uid).get();
     if (!doc.exists) return null;

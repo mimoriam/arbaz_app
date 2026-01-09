@@ -1,5 +1,12 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
+import 'package:arbaz_app/utils/subscription_helper.dart';
+import 'package:arbaz_app/services/firestore_service.dart';
+import 'package:arbaz_app/models/user_model.dart';
+import 'package:arbaz_app/screens/paywall/paywall_screen.dart';
 import 'package:arbaz_app/screens/navbar/cognitive_games/speed_tap.dart';
 import 'package:arbaz_app/screens/navbar/cognitive_games/memory_match.dart';
 import 'package:arbaz_app/screens/navbar/cognitive_games/sequence_follow.dart';
@@ -44,6 +51,11 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
+  
+  // Subscription tracking
+  StreamSubscription<UserRoles?>? _rolesSubscription;
+  String _subscriptionPlan = 'free';
+  int _gamesPlayedToday = 0;
 
   // List of cognitive games based on the design
   final List<CognitiveGame> _games = const [
@@ -142,15 +154,137 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
     );
 
     _animationController.forward();
+    
+    // Stream subscription plan for game limit checking
+    _initSubscriptionStream();
+  }
+  
+  void _initSubscriptionStream() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    
+    final firestoreService = context.read<FirestoreService>();
+    _rolesSubscription = firestoreService.streamUserRoles(user.uid).listen((roles) {
+      if (roles != null && mounted) {
+        setState(() {
+          _subscriptionPlan = roles.subscriptionPlan;
+        });
+      }
+    });
+    
+    // Load initial games played count
+    _loadGamesPlayedToday();
+  }
+  
+  Future<void> _loadGamesPlayedToday() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    
+    final count = await context.read<FirestoreService>().getGamesPlayedToday(user.uid);
+    if (mounted) {
+      setState(() {
+        _gamesPlayedToday = count;
+      });
+    }
   }
 
   @override
   void dispose() {
+    _rolesSubscription?.cancel();
     _animationController.dispose();
     super.dispose();
   }
 
-  void _onGameTap(CognitiveGame game) {
+  /// Shows an upgrade dialog when user hits the daily game limit
+  void _showUpgradeDialog() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        backgroundColor: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.primaryOrange.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.games_outlined,
+                color: AppColors.primaryOrange,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Daily Limit Reached',
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: isDarkMode ? Colors.white : AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Free plan allows 1 brain game per day. Upgrade to Plus for unlimited games!',
+          style: GoogleFonts.inter(
+            fontSize: 15,
+            height: 1.5,
+            color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(
+              'Not Now',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: isDarkMode ? Colors.white70 : AppColors.textSecondary,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const PaywallScreen()),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              'Upgrade',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onGameTap(CognitiveGame game) async {
+    // Check subscription limit for free users
+    if (!SubscriptionHelper.canPlayGame(_subscriptionPlan, _gamesPlayedToday)) {
+      _showUpgradeDialog();
+      return;
+    }
+    
     Widget? gameScreen;
 
     // Navigate to the specific game screen based on game name
@@ -201,6 +335,15 @@ class _CognitiveGamesScreenState extends State<CognitiveGamesScreen>
           ),
         );
         return;
+    }
+
+    // Increment games played count for free users before navigating
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null && SubscriptionHelper.isFreePlan(_subscriptionPlan)) {
+      context.read<FirestoreService>().incrementGamesPlayedToday(user.uid);
+      setState(() {
+        _gamesPlayedToday++;
+      });
     }
 
     Navigator.push(

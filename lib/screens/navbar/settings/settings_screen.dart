@@ -9,6 +9,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
+import 'package:arbaz_app/utils/subscription_helper.dart';
 import 'package:arbaz_app/services/auth_state.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -552,6 +553,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     }
+  }
+
+  /// Shows an upgrade dialog prompting user to upgrade subscription
+  void _showUpgradeDialog(
+    bool isDarkMode, {
+    required String title,
+    required String message,
+    required String feature,
+  }) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        backgroundColor: isDarkMode ? AppColors.surfaceDark : Colors.white,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.primaryOrange.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.workspace_premium_rounded,
+                color: AppColors.primaryOrange,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: GoogleFonts.inter(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: isDarkMode ? Colors.white : AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          message,
+          style: GoogleFonts.inter(
+            fontSize: 15,
+            height: 1.5,
+            color: isDarkMode ? AppColors.textSecondaryDark : AppColors.textSecondary,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: Text(
+              'Not Now',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: isDarkMode ? Colors.white70 : AppColors.textSecondary,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const PaywallScreen()),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              'Upgrade',
+              style: GoogleFonts.inter(
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1103,6 +1191,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _showAddTimeDialog(bool isDarkMode) async {
     final scheduleProvider = context.read<CheckInScheduleProvider>();
+    
+    // Check subscription limit for free users
+    if (!SubscriptionHelper.canAddCheckInSchedule(_subscriptionPlan, scheduleProvider.schedules.length)) {
+      _showUpgradeDialog(
+        isDarkMode,
+        title: 'Schedule Limit Reached',
+        message: 'Free plan allows only 1 check-in schedule. Upgrade to Plus for unlimited schedules.',
+        feature: 'unlimited_schedules',
+      );
+      return;
+    }
+    
     final TimeOfDay? picked = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.now(),
@@ -1932,7 +2032,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
               // Add Contact Button
               GestureDetector(
-                onTap: () => _showAddFamilyMemberDialog(isDarkMode),
+                onTap: () {
+                  // Check subscription limit for free users
+                  if (!SubscriptionHelper.canAddFamilyMember(_subscriptionPlan, contacts.length)) {
+                    _showUpgradeDialog(
+                      isDarkMode,
+                      title: 'Contact Limit Reached',
+                      message: 'Free plan allows up to 2 family members. Upgrade to Plus for unlimited contacts.',
+                      feature: 'unlimited_contacts',
+                    );
+                    return;
+                  }
+                  _showAddFamilyMemberDialog(isDarkMode);
+                },
                 child: Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(vertical: 16),
@@ -2714,6 +2826,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildSafetyVaultCard(bool isDarkMode) {
     return GestureDetector(
       onTap: () {
+        // Check subscription - Emergency Vault requires Plus or Premium
+        if (!SubscriptionHelper.canAccessEmergencyVault(_subscriptionPlan)) {
+          _showUpgradeDialog(
+            isDarkMode,
+            title: 'Emergency Vault Locked',
+            message: 'The Emergency Vault feature is available with Plus or Premium subscription.',
+            feature: 'emergency_vault',
+          );
+          return;
+        }
+        
         Navigator.push(
           context,
           MaterialPageRoute(builder: (context) => const SafetyVaultScreen()),
