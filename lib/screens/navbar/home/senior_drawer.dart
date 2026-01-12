@@ -2,6 +2,7 @@ import 'package:arbaz_app/screens/navbar/calendar/calendar_screen.dart';
 import 'package:arbaz_app/screens/navbar/cognitive_games/cognitive_games_screen.dart';
 import 'package:arbaz_app/screens/navbar/settings/settings_screen.dart';
 import 'package:arbaz_app/screens/paywall/paywall_screen.dart';
+import 'package:arbaz_app/screens/custom_questions/custom_questions_screen.dart';
 import 'package:arbaz_app/utils/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -170,6 +171,20 @@ class SeniorDrawer extends StatelessWidget {
                       context,
                       MaterialPageRoute(
                         builder: (context) => const CognitiveGamesScreen(),
+                      ),
+                    );
+                  },
+                ),
+                _buildDrawerItem(
+                  context,
+                  icon: Icons.quiz_outlined,
+                  label: 'Custom Questions',
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const CustomQuestionsScreen(),
                       ),
                     );
                   },

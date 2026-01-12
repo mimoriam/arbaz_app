@@ -27,6 +27,9 @@ class CheckInRecord {
   /// For multi check-in support - tracks past-due schedules satisfied by this check-in.
   final List<String> scheduledFor;
 
+  /// Custom question responses: questionId -> selected answer label
+  final Map<String, String> customResponses;
+
   CheckInRecord({
     required this.id,
     required this.userId,
@@ -41,6 +44,7 @@ class CheckInRecord {
     this.locationAddress,
     this.scheduledCount = 1,
     this.scheduledFor = const [],
+    this.customResponses = const {},
   });
 
   factory CheckInRecord.fromFirestore(DocumentSnapshot doc) {
@@ -73,6 +77,9 @@ class CheckInRecord {
       locationAddress: data['locationAddress'],
       scheduledCount: (data['scheduledCount'] as int?) ?? 1,
       scheduledFor: (data['scheduledFor'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      customResponses: (data['customResponses'] as Map<String, dynamic>?)?.map(
+        (k, v) => MapEntry(k, v.toString()),
+      ) ?? {},
     );
   }
 
@@ -90,6 +97,7 @@ class CheckInRecord {
       'locationAddress': locationAddress,
       'scheduledCount': scheduledCount,
       'scheduledFor': scheduledFor,
+      if (customResponses.isNotEmpty) 'customResponses': customResponses,
     };
   }
 
@@ -108,6 +116,7 @@ class CheckInRecord {
     String? locationAddress,
     int? scheduledCount,
     List<String>? scheduledFor,
+    Map<String, String>? customResponses,
   }) {
     return CheckInRecord(
       id: id ?? this.id,
@@ -123,6 +132,7 @@ class CheckInRecord {
       locationAddress: locationAddress ?? this.locationAddress,
       scheduledCount: scheduledCount ?? this.scheduledCount,
       scheduledFor: scheduledFor ?? this.scheduledFor,
+      customResponses: customResponses ?? this.customResponses,
     );
   }
 }

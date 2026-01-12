@@ -1233,6 +1233,80 @@ class _CalendarScreenState extends State<CalendarScreen>
               ],
             ),
           ],
+          
+          // Custom question responses
+          if (record.customResponses.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isDarkMode
+                    ? AppColors.surfaceDark.withValues(alpha: 0.5)
+                    : AppColors.primaryBlue.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isDarkMode 
+                      ? AppColors.borderDark.withValues(alpha: 0.5)
+                      : AppColors.primaryBlue.withValues(alpha: 0.1),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.quiz_outlined,
+                        size: 12,
+                        color: AppColors.primaryBlue,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Custom Responses',
+                        style: GoogleFonts.inter(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primaryBlue,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: record.customResponses.entries.map((entry) {
+                      // entry.key is questionId, entry.value is the answer label
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: isDarkMode
+                              ? AppColors.primaryBlue.withValues(alpha: 0.15)
+                              : Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: AppColors.primaryBlue.withValues(alpha: 0.2),
+                          ),
+                        ),
+                        child: Text(
+                          entry.value,
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: isDarkMode
+                                ? AppColors.textPrimaryDark
+                                : AppColors.textPrimary,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

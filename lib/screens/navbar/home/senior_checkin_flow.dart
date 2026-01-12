@@ -9,6 +9,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/models/checkin_model.dart';
 import 'package:arbaz_app/models/activity_log.dart';
+import 'package:arbaz_app/models/custom_question_model.dart';
 import 'package:arbaz_app/providers/games_provider.dart';
 
 /// Data class to hold check-in responses
@@ -19,6 +20,7 @@ class CheckInResponse {
   String? medication;
   bool? wantsBrainExercise;
   String? voiceNoteText;
+  Map<String, String> customResponses = {}; // questionId -> answer label
 
   CheckInResponse();
 }
@@ -43,7 +45,12 @@ class SeniorCheckInFlow extends StatefulWidget {
 class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
     with SingleTickerProviderStateMixin {
   int _currentStep = 0;
-  final int _totalSteps = 4; // Sleep, Energy, Mood, Medication
+  static const int _defaultSteps = 4; // Sleep, Energy, Mood, Medication
+  List<CustomQuestion> _customQuestions = [];
+  bool _isLoadingQuestions = true;
+  
+  int get _totalSteps => _defaultSteps + _customQuestions.length;
+  
   final CheckInResponse _response = CheckInResponse();
   bool _showBrainExercise = false;
   bool _showSuccess = false;
@@ -74,7 +81,32 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
           ),
         );
 
+    _loadCustomQuestions();
     _animationController.forward();
+  }
+
+  Future<void> _loadCustomQuestions() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      setState(() => _isLoadingQuestions = false);
+      return;
+    }
+
+    try {
+      final firestoreService = context.read<FirestoreService>();
+      final questions = await firestoreService.getEnabledCustomQuestions(user.uid);
+      if (mounted) {
+        setState(() {
+          _customQuestions = questions;
+          _isLoadingQuestions = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading custom questions: $e');
+      if (mounted) {
+        setState(() => _isLoadingQuestions = false);
+      }
+    }
   }
 
   @override
@@ -249,6 +281,7 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
       longitude: position?.longitude,
       locationAddress: address,
       scheduledCount: scheduledCount,
+      customResponses: _response.customResponses,
     );
 
     // Retry logic with exponential backoff
@@ -306,13 +339,15 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
           ? AppColors.backgroundDark
           : AppColors.backgroundLight,
       body: SafeArea(
-        child: _isPersisting
+        child: _isLoadingQuestions
             ? _buildLoadingScreen(isDarkMode)
-            : _showSuccess
-            ? _buildSuccessScreen(isDarkMode)
-            : _showBrainExercise
-            ? _buildBrainExerciseScreen(isDarkMode)
-            : _buildQuestionScreen(isDarkMode),
+            : _isPersisting
+                ? _buildLoadingScreen(isDarkMode)
+                : _showSuccess
+                    ? _buildSuccessScreen(isDarkMode)
+                    : _showBrainExercise
+                        ? _buildBrainExerciseScreen(isDarkMode)
+                        : _buildQuestionScreen(isDarkMode),
       ),
     );
   }
@@ -479,8 +514,56 @@ class _SeniorCheckInFlowState extends State<SeniorCheckInFlow>
       case 3:
         return _buildMedicationQuestion(isDarkMode);
       default:
+        // Custom questions start at index 4
+        final customIndex = _currentStep - _defaultSteps;
+        if (customIndex >= 0 && customIndex < _customQuestions.length) {
+          return _buildCustomQuestion(_customQuestions[customIndex], isDarkMode);
+        }
         return const SizedBox();
     }
+  }
+
+  Widget _buildCustomQuestion(CustomQuestion question, bool isDarkMode) {
+    final selectedAnswer = _response.customResponses[question.id];
+    
+    return Column(
+      children: [
+        Text(
+          question.question,
+          textAlign: TextAlign.center,
+          style: GoogleFonts.inter(
+            fontSize: 28,
+            fontWeight: FontWeight.w800,
+            color: isDarkMode
+                ? AppColors.textPrimaryDark
+                : AppColors.textPrimary,
+            height: 1.2,
+          ),
+        ),
+        const SizedBox(height: 40),
+        ...question.answers.map((answer) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _buildOptionCard(
+              isDarkMode: isDarkMode,
+              label: answer.label,
+              emoji: answer.emoji,
+              isSelected: selectedAnswer == answer.label,
+              onTap: () async {
+                if (_transitionInProgress) return;
+                _transitionInProgress = true;
+                setState(() {
+                  _response.customResponses[question.id] = answer.label;
+                });
+                await Future.delayed(const Duration(milliseconds: 200));
+                await _nextStep();
+                if (mounted) _transitionInProgress = false;
+              },
+            ),
+          );
+        }),
+      ],
+    );
   }
 
   Widget _buildSleepQuestion(bool isDarkMode) {

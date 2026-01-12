@@ -287,6 +287,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 // Cancel any pending missed check-in notification
                 NotificationService().cancelMissedCheckInNotification();
                 _wasRunningLate = false; // Reset tracking
+                _previousMissedCheckInsToday = 0; // Reset missed counter tracking
               } else if (isRunningLate) {
                 // Show yellow "I'M OK!" button when running late (overdue schedules)
                 _currentStatus = SafetyStatus.ok;

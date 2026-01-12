@@ -6,6 +6,7 @@ import '../models/checkin_model.dart';
 import '../models/game_result.dart';
 import '../models/security_vault.dart';
 import '../models/activity_log.dart';
+import '../models/custom_question_model.dart';
 import '../utils/constants.dart';
 
 /// Explicit streak state for clear state transitions
@@ -400,6 +401,9 @@ class FirestoreService {
 
   CollectionReference _activityLogsRef(String uid) =>
       _db.collection('users').doc(uid).collection('activityLogs');
+
+  CollectionReference _customQuestionsRef(String uid) =>
+      _db.collection('users').doc(uid).collection('customQuestions');
 
   CollectionReference get _connectionsRef => _db.collection('connections');
 
@@ -1025,6 +1029,7 @@ class FirestoreService {
         'startDate': Timestamp.fromDate(startDate),
         'completedSchedulesToday': updatedCompleted,
         'lastScheduleResetDate': Timestamp.fromDate(lastScheduleResetDate ?? now),
+        'missedCheckInsToday': 0, // Reset missed counter on successful check-in
         if (nextExpected != null) 'nextExpectedCheckIn': Timestamp.fromDate(nextExpected),
       }, SetOptions(merge: true));
       
@@ -1531,4 +1536,94 @@ class FirestoreService {
       });
     });
   }
+
+  // ===== Custom Questions Operations =====
+
+  /// Maximum number of custom questions allowed per user
+  static const int maxCustomQuestions = 5;
+
+  /// Saves a new custom question
+  Future<String> saveCustomQuestion(String uid, CustomQuestion question) async {
+    // Check limit before adding
+    final existing = await getCustomQuestions(uid);
+    if (existing.length >= maxCustomQuestions) {
+      throw Exception('Maximum of $maxCustomQuestions custom questions allowed');
+    }
+    
+    final docRef = await _customQuestionsRef(uid).add(question.toFirestore());
+    return docRef.id;
+  }
+
+  /// Gets all custom questions for a user (regardless of enabled state)
+  Future<List<CustomQuestion>> getCustomQuestions(String uid) async {
+    if (uid.isEmpty) return [];
+    try {
+      final snapshot = await _customQuestionsRef(uid).get();
+      final result = snapshot.docs
+          .map((doc) => CustomQuestion.fromFirestore(doc))
+          .toList();
+      // Sort client-side to avoid index requirement
+      result.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      return result;
+    } catch (e) {
+      return []; // Graceful degradation
+    }
+  }
+
+  /// Gets only enabled custom questions for use in check-in flow
+  Future<List<CustomQuestion>> getEnabledCustomQuestions(String uid) async {
+    if (uid.isEmpty) return [];
+    try {
+      // Fetch all and filter client-side to avoid composite index requirement
+      final snapshot = await _customQuestionsRef(uid).get();
+      final result = snapshot.docs
+          .map((doc) => CustomQuestion.fromFirestore(doc))
+          .where((q) => q.isEnabled)
+          .toList();
+      // Sort client-side
+      result.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      return result;
+    } catch (e) {
+      return []; // Graceful degradation
+    }
+  }
+
+  /// Streams custom questions for real-time updates
+  Stream<List<CustomQuestion>> streamCustomQuestions(String uid) {
+    if (uid.isEmpty) return Stream.value([]);
+    
+    return _customQuestionsRef(uid)
+        .snapshots()
+        .map((snapshot) {
+          final questions = snapshot.docs
+              .map((doc) => CustomQuestion.fromFirestore(doc))
+              .toList();
+          // Sort client-side to avoid index requirement
+          questions.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+          return questions;
+        })
+        .handleError((_) => <CustomQuestion>[]);
+  }
+
+  /// Updates an existing custom question
+  Future<void> updateCustomQuestion(String uid, CustomQuestion question) async {
+    await _customQuestionsRef(uid).doc(question.id).update({
+      ...question.toFirestore(),
+      'updatedAt': Timestamp.now(),
+    });
+  }
+
+  /// Deletes a custom question
+  Future<void> deleteCustomQuestion(String uid, String questionId) async {
+    await _customQuestionsRef(uid).doc(questionId).delete();
+  }
+
+  /// Toggles the enabled state of a custom question
+  Future<void> toggleCustomQuestion(String uid, String questionId, bool enabled) async {
+    await _customQuestionsRef(uid).doc(questionId).update({
+      'isEnabled': enabled,
+      'updatedAt': Timestamp.now(),
+    });
+  }
 }
+
