@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../screens/auth/login/login_screen.dart';
 import '../screens/navbar/home/home_screen.dart';
 import '../screens/questionnaire/questionnaire_screen.dart';
+import '../screens/questionnaire/checkin_time_selection_screen.dart';
 import 'fcm_service.dart';
 import 'firestore_service.dart';
 import 'role_preference_service.dart';
@@ -59,6 +60,7 @@ class _RoleRouterState extends State<_RoleRouter> {
   bool _isLoading = true;
   String? _error;
   String? _targetRole;
+  bool _hasCompletedSeniorSetup = true; // Defaults to true for existing users
 
   @override
   void initState() {
@@ -75,6 +77,7 @@ class _RoleRouterState extends State<_RoleRouter> {
         _isLoading = true;
         _error = null;
         _targetRole = null;
+        _hasCompletedSeniorSetup = true;
       });
       _loadRoleAndRoute();
     }
@@ -153,6 +156,7 @@ class _RoleRouterState extends State<_RoleRouter> {
         setState(() {
           _isLoading = false;
           _targetRole = activeRole;
+          _hasCompletedSeniorSetup = roles.hasCompletedSeniorSetup;
         });
       }
     } catch (e) {
@@ -183,6 +187,10 @@ class _RoleRouterState extends State<_RoleRouter> {
 
     // Route to appropriate home screen
     if (_targetRole == 'senior') {
+      // Check if senior setup is complete (check-in time selected)
+      if (!_hasCompletedSeniorSetup) {
+        return const CheckInTimeSelectionScreen();
+      }
       return const SeniorHomeScreen();
     } else {
       return const FamilyHomeScreen();

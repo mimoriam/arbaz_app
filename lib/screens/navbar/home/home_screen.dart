@@ -225,11 +225,11 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
               effectiveCompleted = [];
             }
             
-            // Check if ALL past-due schedules are completed
-            final allCompleted = areAllSchedulesCompleted(
+            // Check if ALL schedules for today are completed (no uncompleted schedules left)
+            // This means the button should be disabled (blue "I'm Safe" state)
+            final allCompleted = !hasAnyPendingSchedules(
               schedules,
               effectiveCompleted,
-              now,
             );
             
             // Legacy: Check if at least one check-in was done today
@@ -252,15 +252,16 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
             final skipDay1Default = isDay1 && hasOnlyDefaultSchedule;
             
             // Check if running late: any past-due schedule not completed
+            // Uses getOverdueSchedules to detect schedules whose time has passed
             bool isRunningLate = false;
             if (!allCompleted && !skipDay1Default) {
-              // There are pending schedules that have passed - running late
-              final pendingSchedules = getPendingSchedules(
+              // There are pending schedules - check if any are overdue (past their scheduled time)
+              final overdueSchedules = getOverdueSchedules(
                 schedules,
                 effectiveCompleted,
                 now,
               );
-              isRunningLate = pendingSchedules.isNotEmpty;
+              isRunningLate = overdueSchedules.isNotEmpty;
             }
             
             // Schedule a timer to update status when nextExpectedCheckIn is reached
@@ -287,7 +288,7 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 NotificationService().cancelMissedCheckInNotification();
                 _wasRunningLate = false; // Reset tracking
               } else if (isRunningLate) {
-                // Show yellow "I'M OK!" button when running late
+                // Show yellow "I'M OK!" button when running late (overdue schedules)
                 _currentStatus = SafetyStatus.ok;
                 
                 // Trigger notification only on first detection of running late
@@ -299,8 +300,8 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
                 }
                 _wasRunningLate = true;
               } else {
-                // Not running late - waiting for next schedule
-                // Keep safe status but button still enabled for early check-in
+                // Not running late - has upcoming schedules (green button)
+                // Button is enabled for early check-in
                 _currentStatus = SafetyStatus.safe;
                 _wasRunningLate = false;
               }
@@ -1460,10 +1461,11 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
       isClickable = true;
     } else {
       // Green state - waiting for check-in (may be early)
-      primaryColor = const Color(0xFF14B8A6); // Teal/Emerald green (matching image vibe)
-      secondaryColor = const Color(0xFF0F766E); // Darker Teal
-      ringColor = const Color(0xFF5EEAD4); // Light Teal ring
-      statusIcon = Icons.check_rounded; // Checkmark matching image
+      // Vibrant green matching the design with breathing animation
+      primaryColor = const Color(0xFF4ADE80); // Bright green (matching design)
+      secondaryColor = const Color(0xFF22C55E); // Deeper green for gradient
+      ringColor = const Color(0xFF86EFAC); // Light green ring for breathing effect
+      statusIcon = Icons.favorite; // Heart icon matching design
       statusText = "I'M OK";
       // Show next check-in time if available
       if (_nextExpectedCheckIn != null) {
@@ -1478,111 +1480,126 @@ class _SeniorHomeScreenState extends State<SeniorHomeScreen>
     return AnimatedBuilder(
       animation: _pulseAnimation,
       builder: (context, child) {
-        return Transform.scale(
-          // Only pulse if clickable and not in vacation mode
-          scale: (isVacationMode || !isClickable) ? 1.0 : _pulseAnimation.value,
-          child: child,
-        );
-      },
-      child: GestureDetector(
-        onTap: isClickable ? _onStatusButtonTap : null,
-        child: Opacity(
-          opacity: (isVacationMode || isLoading) ? 0.5 : 1.0,
-          child: Container(
-            width: buttonSize,
-            height: buttonSize,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              // Outer ring effect
-              border: Border.all(
-                color: ringColor.withValues(alpha: 0.6),
-                width: 8,
-              ),
-              boxShadow: (isVacationMode || !isClickable)
-                  ? [] // No shadow when disabled or after completion
-                  : [
-                      BoxShadow(
-                        color: primaryColor.withValues(alpha: 0.3),
-                        blurRadius: 30,
-                        spreadRadius: 5,
-                      ),
-                      BoxShadow(
-                        color: secondaryColor.withValues(alpha: 0.2),
-                        blurRadius: 60,
-                        spreadRadius: 15,
-                      ),
-                    ],
-            ),
+        // Calculate breathing effect values based on animation
+        // When animation goes 1.0 -> 1.08, we animate the glow radius
+        final double breathingValue = _pulseAnimation.value;
+        final bool isAnimating = isClickable && !isVacationMode;
+        
+        // Breathing ring grows from 8 to 16 px as animation pulses
+        final double ringWidth = isAnimating 
+            ? 8 + (breathingValue - 1.0) * 100  // 8 + 0 to 8 = 8 to 16
+            : 8;
+        
+        // Breathing glow shadow increases as ring expands
+        final double glowSpread = isAnimating
+            ? 5 + (breathingValue - 1.0) * 125   // 5 to 15
+            : 5;
+        final double glowBlur = isAnimating
+            ? 30 + (breathingValue - 1.0) * 375  // 30 to 60
+            : 30;
+        
+        return GestureDetector(
+          onTap: isClickable ? _onStatusButtonTap : null,
+          child: Opacity(
+            opacity: (isVacationMode || isLoading) ? 0.5 : 1.0,
             child: Container(
+              width: buttonSize,
+              height: buttonSize,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: [primaryColor, secondaryColor],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
+                // Breathing outer ring effect - width animates with pulse
+                border: Border.all(
+                  color: ringColor.withValues(alpha: isAnimating ? 0.4 + (breathingValue - 1.0) * 2.5 : 0.6),
+                  width: ringWidth,
                 ),
+                boxShadow: (isVacationMode || !isClickable)
+                    ? [] // No shadow when disabled or after completion
+                    : [
+                        // Inner glow - animated
+                        BoxShadow(
+                          color: primaryColor.withValues(alpha: 0.3),
+                          blurRadius: glowBlur,
+                          spreadRadius: glowSpread,
+                        ),
+                        // Outer glow - more diffuse, also animated
+                        BoxShadow(
+                          color: secondaryColor.withValues(alpha: 0.15 + (breathingValue - 1.0) * 0.625),
+                          blurRadius: glowBlur * 2,
+                          spreadRadius: glowSpread * 3,
+                        ),
+                      ],
               ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Status Icon in white circle removed? No, image has checkmark "I'M OK".
-                  // In code I used a white circle previously. 
-                  // Image shows checkmark is part of the "I'M OK" or above it.
-                  // I'll keep the white circle but make it blend or cleaner? 
-                  // Actually image has just a BIG checkmark above specific text.
-                  // I'll keep the white circle implementation for now but update icon to Check for green state.
-                  
-                  // Status Icon
-                   Container(
-                    width: buttonSize * 0.22,
-                    height: buttonSize * 0.22,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white.withValues(alpha: 0.2), // Transparent white
-                    ),
-                    child: isLoading
-                        ? Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: CircularProgressIndicator(
-                              strokeWidth: 3,
+              child: Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [primaryColor, secondaryColor],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Status Icon in white circle with heart icon for green state
+                    Container(
+                      width: buttonSize * 0.22,
+                      height: buttonSize * 0.22,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white.withValues(alpha: 0.2), // Transparent white
+                      ),
+                      child: isLoading
+                          ? Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 3,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Icon(
+                              // Use heart icon for green state like in design
+                              _currentStatus == SafetyStatus.safe && !_allSchedulesCompleted
+                                  ? Icons.favorite
+                                  : statusIcon,
                               color: Colors.white,
+                              size: buttonSize * 0.14,
                             ),
-                          )
-                        : Icon(statusIcon, color: Colors.white, size: buttonSize * 0.14),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Status Text
-                  Text(
-                    statusText,
-                    style: GoogleFonts.inter(
-                      fontSize: buttonSize * 0.12,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
-                      letterSpacing: 1,
                     ),
-                  ),
-                  const SizedBox(height: 6),
+                    const SizedBox(height: 16),
 
-                  // Subtitle
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Text(
-                      subtitleText,
-                      textAlign: TextAlign.center,
+                    // Status Text
+                    Text(
+                      statusText,
                       style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white.withValues(alpha: 0.9),
+                        fontSize: buttonSize * 0.12,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                        letterSpacing: 1,
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 6),
+
+                    // Subtitle
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Text(
+                        subtitleText,
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white.withValues(alpha: 0.9),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -2456,11 +2473,12 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       completedToday = [];
     }
     
-    // Check if ALL past-due schedules are completed
-    final allCompleted = areAllSchedulesCompleted(
-      schedules.isNotEmpty ? schedules : ['11:00 AM'],
+    final effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
+    
+    // Check if ALL schedules for today are completed (no uncompleted schedules left)
+    final allCompleted = !hasAnyPendingSchedules(
+      effectiveSchedules,
       completedToday,
-      now,
     );
     
     if (allCompleted) {
@@ -2485,14 +2503,14 @@ class _FamilyHomeScreenState extends State<FamilyHomeScreen>
       }
     }
 
-    // Check if any schedule is past due and not completed
-    final pendingSchedules = getPendingSchedules(
-      schedules.isNotEmpty ? schedules : ['11:00 AM'],
+    // Check if any schedule is overdue (time has passed but not completed)
+    final overdueSchedules = getOverdueSchedules(
+      effectiveSchedules,
       completedToday,
       now,
     );
     
-    if (pendingSchedules.isNotEmpty) {
+    if (overdueSchedules.isNotEmpty) {
       return SeniorCheckInStatus.alert;
     }
 

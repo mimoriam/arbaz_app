@@ -136,6 +136,7 @@ class UserRoles {
   final bool isPro; // Pro subscription status
   final String? activeRole; // The persisted active role: 'senior' or 'family'
   final bool hasConfirmedSeniorRole; // True if user explicitly opted into senior features
+  final bool hasCompletedSeniorSetup; // True after senior selects check-in time
   final String subscriptionPlan; // 'free', 'plus', or 'premium'
 
   UserRoles({
@@ -144,6 +145,7 @@ class UserRoles {
     this.isPro = false,
     this.activeRole,
     this.hasConfirmedSeniorRole = false,
+    this.hasCompletedSeniorSetup = true, // Defaults to true for existing users
     this.subscriptionPlan = 'free',
   });
 
@@ -179,6 +181,7 @@ class UserRoles {
       isPro: data['isPro'] == true,
       activeRole: data['currentRole'] as String?,
       hasConfirmedSeniorRole: data['hasConfirmedSeniorRole'] == true,
+      hasCompletedSeniorSetup: data['hasCompletedSeniorSetup'] != false, // Defaults to true if not set
       subscriptionPlan: (data['subscriptionPlan'] as String?) ?? 'free',
     );
   }
@@ -190,6 +193,7 @@ class UserRoles {
       'isPro': isPro,
       'currentRole': activeRole,
       'hasConfirmedSeniorRole': hasConfirmedSeniorRole,
+      'hasCompletedSeniorSetup': hasCompletedSeniorSetup,
       'subscriptionPlan': subscriptionPlan,
     };
   }
@@ -200,6 +204,7 @@ class UserRoles {
     bool? isPro,
     String? activeRole,
     bool? hasConfirmedSeniorRole,
+    bool? hasCompletedSeniorSetup,
     String? subscriptionPlan,
   }) {
     return UserRoles(
@@ -208,6 +213,7 @@ class UserRoles {
       isPro: isPro ?? this.isPro,
       activeRole: activeRole ?? this.activeRole,
       hasConfirmedSeniorRole: hasConfirmedSeniorRole ?? this.hasConfirmedSeniorRole,
+      hasCompletedSeniorSetup: hasCompletedSeniorSetup ?? this.hasCompletedSeniorSetup,
       subscriptionPlan: subscriptionPlan ?? this.subscriptionPlan,
     );
   }

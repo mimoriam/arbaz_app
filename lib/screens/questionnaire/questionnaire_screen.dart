@@ -1,4 +1,5 @@
 import 'package:arbaz_app/screens/navbar/home/home_screen.dart';
+import 'package:arbaz_app/screens/questionnaire/checkin_time_selection_screen.dart';
 import 'package:arbaz_app/services/fcm_service.dart';
 import 'package:arbaz_app/services/firestore_service.dart';
 import 'package:arbaz_app/services/role_preference_service.dart';
@@ -126,11 +127,12 @@ class _QuestionnaireScreenState extends State<QuestionnaireScreen>
 
     if (!mounted) return;
 
-      // Navigate to appropriate home screen
+      // Navigate to appropriate screen
+      // Seniors go to time selection first, family members go to home
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (_) => role == 'senior'
-              ? const SeniorHomeScreen()
+              ? const CheckInTimeSelectionScreen()
               : const FamilyHomeScreen(),
         ),
       );

@@ -7,7 +7,6 @@ import '../models/game_result.dart';
 import '../models/security_vault.dart';
 import '../models/activity_log.dart';
 import '../utils/constants.dart';
-import '../utils/timezone_helper.dart';
 
 /// Explicit streak state for clear state transitions
 enum StreakState {
@@ -67,27 +66,30 @@ StreakState calculateStreakState(DateTime last, DateTime now) {
 /// 
 /// If [timezone] is provided, uses timezone-aware same-day detection.
 /// Otherwise falls back to local time comparison.
+/// 
+/// If [completedSchedulesToday] is provided, those schedules are skipped
+/// when calculating the next check-in time. This ensures that after checking
+/// in for a schedule, the next displayed time is correct even if new schedules
+/// are added.
 DateTime? calculateNextExpectedCheckIn(
   List<String> schedules,
   DateTime now,
   DateTime? lastCheckIn, {
   String? timezone,
+  List<String>? completedSchedulesToday,
 }) {
   final effectiveSchedules = schedules.isNotEmpty ? schedules : ['11:00 AM'];
+  final completed = completedSchedulesToday ?? [];
   
-  // Check if already checked in today (timezone-aware if timezone provided)
-  bool checkedInToday;
-  if (timezone != null && lastCheckIn != null) {
-    checkedInToday = TimezoneHelper.isSameDay(lastCheckIn, now, timezone);
-  } else {
-    checkedInToday = lastCheckIn != null &&
-        lastCheckIn.year == now.year &&
-        lastCheckIn.month == now.month &&
-        lastCheckIn.day == now.day;
-  }
+  // Filter out completed schedules for today's calculation
+  // Normalize for case-insensitive comparison
+  final completedNormalized = completed.map((s) => s.toUpperCase()).toSet();
+  final pendingSchedules = effectiveSchedules.where((schedule) {
+    return !completedNormalized.contains(schedule.toUpperCase());
+  }).toList();
   
-  if (checkedInToday) {
-    // Find earliest schedule tomorrow
+  // If all schedules are completed, find earliest schedule tomorrow
+  if (pendingSchedules.isEmpty) {
     DateTime? earliest;
     final tomorrow = DateTime(now.year, now.month, now.day + 1);
     
@@ -107,13 +109,12 @@ DateTime? calculateNextExpectedCheckIn(
     return earliest;
   }
   
-  // Not checked in today - find next upcoming schedule today or tomorrow
-  // Also track earliest today (even if passed) for "running late" detection
+  // There are pending schedules - find next upcoming among pending only
   DateTime? nextToday;
   DateTime? earliestToday; // For "running late" detection
   DateTime? earliestTomorrow;
   
-  for (final schedule in effectiveSchedules) {
+  for (final schedule in pendingSchedules) {
     final parsed = _parseScheduleTime(schedule);
     if (parsed == null) continue;
     
@@ -123,7 +124,7 @@ DateTime? calculateNextExpectedCheckIn(
       parsed.hours, parsed.minutes,
     );
     
-    // Track earliest schedule for today (even if passed - for running late detection)
+    // Track earliest PENDING schedule for today (even if passed - for running late detection)
     if (earliestToday == null || todayTime.isBefore(earliestToday)) {
       earliestToday = todayTime;
     }
@@ -145,9 +146,9 @@ DateTime? calculateNextExpectedCheckIn(
     }
   }
   
-  // If there's an upcoming schedule today, use it
-  // Otherwise, if all today's schedules have passed, return earliest today for "running late" detection
-  // Only fall back to tomorrow if there are no schedules today at all
+  // If there's an upcoming PENDING schedule today, use it
+  // Otherwise, if all today's pending schedules have passed, return earliest today for "running late" detection
+  // Only fall back to tomorrow if there are no pending schedules today at all
   return nextToday ?? earliestToday ?? earliestTomorrow;
 }
 
@@ -221,6 +222,117 @@ bool areAllSchedulesCompleted(
   
   // All past-due schedules are completed
   return true;
+}
+
+/// Check if there are ANY uncompleted schedules for today (including future ones).
+/// Used to determine if check-in button should be enabled at all.
+/// Returns true if there are pending check-ins the user can do today.
+bool hasAnyPendingSchedules(
+  List<String> allSchedules,
+  List<String> completedSchedules,
+) {
+  for (final schedule in allSchedules) {
+    final scheduleUpper = schedule.toUpperCase();
+    
+    // Check if this schedule has been completed
+    if (!completedSchedules.contains(scheduleUpper) &&
+        !completedSchedules.contains(schedule)) {
+      // Found an uncompleted schedule
+      return true;
+    }
+  }
+  
+  // All schedules are completed
+  return false;
+}
+
+/// Get schedules that are overdue (time has passed but not completed).
+/// Used to determine if yellow "running late" button should be shown.
+List<String> getOverdueSchedules(
+  List<String> allSchedules,
+  List<String> completedSchedules,
+  DateTime now,
+) {
+  final overdue = <String>[];
+  
+  for (final schedule in allSchedules) {
+    final scheduleUpper = schedule.toUpperCase();
+    
+    // Skip if already completed
+    if (completedSchedules.contains(scheduleUpper) ||
+        completedSchedules.contains(schedule)) {
+      continue;
+    }
+    
+    final parsed = _parseScheduleTime(schedule);
+    if (parsed == null) continue;
+    
+    // Calculate today's time for this schedule
+    final scheduleTime = DateTime(
+      now.year, now.month, now.day,
+      parsed.hours, parsed.minutes,
+    );
+    
+    // If schedule time has passed, it's overdue
+    if (now.isAfter(scheduleTime)) {
+      overdue.add(scheduleUpper);
+    }
+  }
+  
+  return overdue;
+}
+
+/// Get the next schedule to resolve when checking in.
+/// - If checking in EARLY (before any schedule time): returns only the nearest upcoming schedule
+/// - If checking in LATE (after one or more schedule times): returns all overdue schedules
+/// 
+/// This ensures that early check-ins only resolve the nearest schedule,
+/// while late check-ins resolve all missed schedules at once.
+List<String> getSchedulesToResolve(
+  List<String> allSchedules,
+  List<String> completedSchedules,
+  DateTime now,
+) {
+  final overdue = getOverdueSchedules(allSchedules, completedSchedules, now);
+  
+  // If there are overdue schedules, resolve all of them
+  if (overdue.isNotEmpty) {
+    return overdue;
+  }
+  
+  // No overdue schedules - find the nearest upcoming schedule
+  String? nearestSchedule;
+  DateTime? nearestTime;
+  
+  for (final schedule in allSchedules) {
+    final scheduleUpper = schedule.toUpperCase();
+    
+    // Skip if already completed
+    if (completedSchedules.contains(scheduleUpper) ||
+        completedSchedules.contains(schedule)) {
+      continue;
+    }
+    
+    final parsed = _parseScheduleTime(schedule);
+    if (parsed == null) continue;
+    
+    // Calculate today's time for this schedule
+    final scheduleTime = DateTime(
+      now.year, now.month, now.day,
+      parsed.hours, parsed.minutes,
+    );
+    
+    // Only consider future schedules
+    if (scheduleTime.isAfter(now)) {
+      if (nearestTime == null || scheduleTime.isBefore(nearestTime)) {
+        nearestTime = scheduleTime;
+        nearestSchedule = scheduleUpper;
+      }
+    }
+  }
+  
+  // Return the nearest upcoming schedule, or empty if none found
+  return nearestSchedule != null ? [nearestSchedule] : [];
 }
 
 /// Retry a Future with exponential backoff for transient failures
@@ -403,24 +515,39 @@ class FirestoreService {
     // When user explicitly chooses to be a senior (initial role selection),
     // they should be confirmed automatically. The confirmation dialog is
     // only for users who were never seniors switching to senior view.
+    // Note: hasCompletedSeniorSetup is false until they pick their check-in time.
     await _rolesRef(uid).set({
       'isSenior': true,
       'hasConfirmedSeniorRole': true,
+      'hasCompletedSeniorSetup': false, // Will be true after time selection
     }, SetOptions(merge: true));
     
-    // Set seniorCreatedAt and nextExpectedCheckIn if not already set
+    // Only set seniorCreatedAt - schedule will be set in time selection screen
     final seniorState = await getSeniorState(uid);
     if (seniorState == null || seniorState.seniorCreatedAt == null) {
-      final now = DateTime.now();
-      final defaultSchedules = ['11:00 AM'];
-      final nextExpected = calculateNextExpectedCheckIn(defaultSchedules, now, null);
-      
       await _seniorStateRef(uid).set({
         'seniorCreatedAt': Timestamp.now(),
-        'checkInSchedules': defaultSchedules,
-        if (nextExpected != null) 'nextExpectedCheckIn': Timestamp.fromDate(nextExpected),
       }, SetOptions(merge: true));
     }
+  }
+
+  /// Completes senior setup by saving the selected check-in time.
+  /// Called after senior selects their preferred time in CheckInTimeSelectionScreen.
+  Future<void> completeSeniorSetup(String uid, String selectedTime) async {
+    final now = DateTime.now();
+    final schedules = [selectedTime];
+    final nextExpected = calculateNextExpectedCheckIn(schedules, now, null);
+    
+    // Update schedules and next expected check-in
+    await _seniorStateRef(uid).set({
+      'checkInSchedules': schedules,
+      if (nextExpected != null) 'nextExpectedCheckIn': Timestamp.fromDate(nextExpected),
+    }, SetOptions(merge: true));
+    
+    // Mark setup as complete
+    await _rolesRef(uid).set({
+      'hasCompletedSeniorSetup': true,
+    }, SetOptions(merge: true));
   }
 
   Future<void> setAsFamilyMember(String uid) async {
@@ -573,6 +700,9 @@ class FirestoreService {
       
       List<String> currentSchedules = AppConstants.defaultSchedules;
       DateTime? lastCheckIn;
+      List<String> completedSchedulesToday = [];
+      DateTime? lastScheduleResetDate;
+      final now = DateTime.now();
       
       if (seniorStateDoc.exists) {
         final data = seniorStateDoc.data() as Map<String, dynamic>?;
@@ -585,12 +715,34 @@ class FirestoreService {
           if (data['lastCheckIn'] is Timestamp) {
             lastCheckIn = (data['lastCheckIn'] as Timestamp).toDate();
           }
+          if (data['completedSchedulesToday'] is List) {
+            completedSchedulesToday = (data['completedSchedulesToday'] as List)
+                .map((e) => e.toString())
+                .toList();
+          }
+          if (data['lastScheduleResetDate'] is Timestamp) {
+            lastScheduleResetDate = (data['lastScheduleResetDate'] as Timestamp).toDate();
+          }
+          
+          // Reset completed schedules if it's a new day
+          final isNewDay = lastScheduleResetDate == null ||
+              lastScheduleResetDate.year != now.year ||
+              lastScheduleResetDate.month != now.month ||
+              lastScheduleResetDate.day != now.day;
+          if (isNewDay) {
+            completedSchedulesToday = [];
+          }
         }
       }
       
-      // Add new time and calculate next expected
+      // Add new time and calculate next expected (considering completed schedules)
       final updatedSchedules = [...currentSchedules, time];
-      final nextExpected = calculateNextExpectedCheckIn(updatedSchedules, DateTime.now(), lastCheckIn);
+      final nextExpected = calculateNextExpectedCheckIn(
+        updatedSchedules,
+        now,
+        lastCheckIn,
+        completedSchedulesToday: completedSchedulesToday,
+      );
       
       transaction.set(_seniorStateRef(uid), {
         'checkInSchedules': FieldValue.arrayUnion([time]),
@@ -598,6 +750,7 @@ class FirestoreService {
       }, SetOptions(merge: true));
     });
   }
+
 
   /// Atomically removes a schedule time using a transaction to prevent race conditions
   /// Also recalculates nextExpectedCheckIn to keep Cloud Functions in sync
@@ -607,6 +760,9 @@ class FirestoreService {
       
       List<String> currentSchedules = AppConstants.defaultSchedules;
       DateTime? lastCheckIn;
+      List<String> completedSchedulesToday = [];
+      DateTime? lastScheduleResetDate;
+      final now = DateTime.now();
       
       if (seniorStateDoc.exists) {
         final data = seniorStateDoc.data() as Map<String, dynamic>?;
@@ -619,19 +775,48 @@ class FirestoreService {
           if (data['lastCheckIn'] is Timestamp) {
             lastCheckIn = (data['lastCheckIn'] as Timestamp).toDate();
           }
+          if (data['completedSchedulesToday'] is List) {
+            completedSchedulesToday = (data['completedSchedulesToday'] as List)
+                .map((e) => e.toString())
+                .toList();
+          }
+          if (data['lastScheduleResetDate'] is Timestamp) {
+            lastScheduleResetDate = (data['lastScheduleResetDate'] as Timestamp).toDate();
+          }
+          
+          // Reset completed schedules if it's a new day
+          final isNewDay = lastScheduleResetDate == null ||
+              lastScheduleResetDate.year != now.year ||
+              lastScheduleResetDate.month != now.month ||
+              lastScheduleResetDate.day != now.day;
+          if (isNewDay) {
+            completedSchedulesToday = [];
+          }
         }
       }
       
-      // Remove time and calculate next expected
+      // Remove time (also remove from completed if present) and calculate next expected
       final updatedSchedules = currentSchedules.where((s) => s != time).toList();
-      final nextExpected = calculateNextExpectedCheckIn(updatedSchedules, DateTime.now(), lastCheckIn);
+      final updatedCompleted = completedSchedulesToday
+          .where((s) => s.toUpperCase() != time.toUpperCase())
+          .toList();
+      
+      final nextExpected = calculateNextExpectedCheckIn(
+        updatedSchedules,
+        now,
+        lastCheckIn,
+        completedSchedulesToday: updatedCompleted,
+      );
       
       transaction.set(_seniorStateRef(uid), {
         'checkInSchedules': FieldValue.arrayRemove([time]),
+        // Also remove from completed to clean up state
+        'completedSchedulesToday': updatedCompleted,
         if (nextExpected != null) 'nextExpectedCheckIn': Timestamp.fromDate(nextExpected),
       }, SetOptions(merge: true));
     });
   }
+
 
   /// Atomically updates a single field in SeniorState using merge
   /// Avoids read-modify-write race conditions
@@ -807,7 +992,10 @@ class FirestoreService {
       }
       
       // 2. Calculate which schedules this check-in satisfies
-      final satisfiedSchedules = getPendingSchedules(
+      // Uses getSchedulesToResolve to handle both early and late check-ins correctly:
+      // - Early check-in (before schedule time): resolves only the nearest upcoming schedule
+      // - Late check-in (after schedule time): resolves all overdue schedules
+      final satisfiedSchedules = getSchedulesToResolve(
         schedules,
         completedSchedulesToday,
         now,
